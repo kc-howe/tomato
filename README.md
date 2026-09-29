@@ -14,13 +14,9 @@
 
 ToMATo quickly finds intuitive clusters in data. It does so by choosing the most topologically persistent clusters in a neighborhood graph with respect to a vertex function, typically a smooth density estimate. Its clusters therefore correspond to persistent modes of some density estimate (or other vertex function), rather than to components of an arbitrary distance or density threshold.
 
-ToMATo was originally introduced as an algorithm for finding clusters in any graph equipped with any vertex function. This repository preserves that generic form via the `ToMAToCore` class, which takes a graph and vertex function directly. For general-purpose clustering of point cloud data, three variants fix these choices for you:
+ToMATo was originally introduced as an algorithm for finding clusters in any graph equipped with any vertex function. This repository preserves that generic form via the `ToMAToCore` class, which takes a graph and vertex function directly. For general-purpose clustering of point cloud data, `ToMATo` fixes the choice of graph and vertex function, using the RMS distance estimator of *distance to a measure* (Chazal et al., 2011) on a KNN graph, as used in the original ToMATo paper.
 
-- `ToMATo`: The default implementation of ToMATo, using the RMS distance estimator of *distance to a measure* (Chazal et al., 2011), as used in the original ToMATo paper.
-- `ToMAToSCAN`: An HDBSCAN-like variant that clusters a KNN graph using mutual reachability edge gradients.
-- `MetricToMATo`: A distance-based variant that uses KNN distances directly as edge gradients.
-
-These three variants address the most common clustering use cases, but the underlying ToMATo algorithm is a general framework for graph clustering, with applications extending to network analysis, geographic regionalization, and other graph-based modeling tasks.
+This addreses the needs of the most common spatial clustering use cases, however the underlying ToMATo algorithm is a highly extensible, general framework for graph clustering, with applications extending to network analysis, geographic regionalization, and other graph-based modeling tasks.
 
 ToMATo was introduced in 2011 by Chazal, et al.:
 
@@ -45,7 +41,7 @@ pip install .
 
 ## How to Use
 
-The ToMATo variants are designed to conform to the sklearn API.
+The `ToMATo` class is designed to conform to the sklearn API.
 
 ``` python
 from tomato import ToMATo
