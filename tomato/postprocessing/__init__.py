@@ -1,0 +1,1 @@
+from tomato.postprocessing.merge_tree import MergeTree, clf_to_tree
