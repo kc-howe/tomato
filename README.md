@@ -4,7 +4,7 @@
 
 **Author**: Kenneth Howe
 
-**Version**: 0.4.4
+**Version**: 0.4.5
 
 </br>
 
@@ -32,11 +32,10 @@ ToMATo was introduced in 2011 by Chazal, et al.:
 
 ## Installation
 
-To install, navigate to the package directory and run:
+To install, run:
 
 ``` bash
-pip install -r requirements.txt
-pip install .
+pip install pytomato
 ```
 
 ## How to Use
