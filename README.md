@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="./docs/images/tomato-logo.svg", height=400 />
+  <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-logo.svg", height=400 />
 </p>
 
 **Author**: Kenneth Howe
 
-**Version**: 0.4.0
+**Version**: 0.4.3
 
 </br>
 
@@ -25,7 +25,7 @@ ToMATo was introduced in 2011 by Chazal, et al.:
 
 <p align="center">
   <figure style="text-align: center;">
-    <img src="./docs/images/tomato-example.png", width=800 />
+    <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-example.png", width=800 />
     <figcaption>ToMAToSCAN Example Clustering.</figcaption>
   </figure>
 </p>
@@ -104,7 +104,7 @@ Assignment probabilities can also be computed for every cluster in a labeling, e
 
 <p align="center">
   <figure style="text-align: center;">
-    <img src="./docs/images/tomato-soft-clustering-example.png", width=800 />
+    <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-soft-clustering-example.png", width=800 />
     <figcaption>ToMATo Soft Clustering Example with Color Blending.</figcaption>
   </figure>
 </p>
@@ -124,7 +124,7 @@ clf.fit(graph, X)
 
 <p align="center">
   <figure style="text-align: center;">
-    <img src="./docs/images/tomato-regionalization-example.png", width=800 />
+    <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-regionalization-example.png", width=800 />
     <figcaption>GeoToMATo Regionalization Example on Salinas Valley, CA Hyperspectral Imagery.</figcaption>
   </figure>
 </p>
@@ -151,14 +151,14 @@ viz.plot_persistence_diagram()
 
 <p align="center">
   <figure style="text-align: center;">
-    <img src="./docs/images/tomato-labels.png", width=800 />
+    <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-labels.png", width=800 />
     <figcaption>Labels plot.</figcaption>
   </figure>
 </p>
 
 <p align="center">
   <figure style="text-align: center;">
-    <img src="./docs/images/tomato-pd.png", width=800 />
+    <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-pd.png", width=800 />
     <figcaption>Persistence diagram plot.</figcaption>
   </figure>
 </p>
@@ -170,13 +170,13 @@ ToMATo runs in near-linear time, making it significantly faster than comparable 
 The following timing results compare ToMATo against DBSCAN, HDBSCAN, and two implementations of K-Means:
 
 <p align="center">
-  <img src="./docs/images/tomato-small-timings.png", width=600 />
+  <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-small-timings.png", width=600 />
 </p>
 
 Extended to 1.5 million data points, ToMATo maintains near-linear scaling with relatively fast clustering times:
 
 <p align="center">
-  <img src="./docs/images/tomato-large-timings.png", width=600 />
+  <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-large-timings.png", width=600 />
 </p>
 
 *Timing and plotting code adapted from the [HDBSCAN repository](https://github.com/scikit-learn-contrib/hdbscan/blob/master/notebooks/Benchmarking%20scalability%20of%20clustering%20implementations-v0.7.ipynb).*

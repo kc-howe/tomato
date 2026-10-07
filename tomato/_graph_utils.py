@@ -1,7 +1,6 @@
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 from numba import njit
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree, connected_components
@@ -67,125 +66,94 @@ def get_assignment_parents(parent, basin_assignment):
     return out
 
 
+def _best_edge_per_row(A, mask, key, ascending):
+    """
+    A    : CSR matrix.
+    mask : bool per stored edge (which edges are candidates).
+    key  : per-edge value to maximise (ascending) or minimise (descending).
+    Keeps, per row, the FIRST candidate edge with the extreme key
+    (same tie-break as groupby().idxmax/idxmin on CSR-ordered COO).
+    """
+    indptr, indices, data = A.indptr, A.indices, A.data
+    n = A.shape[0]
+
+    e = np.flatnonzero(mask)  # edge ids, row-sorted
+    if e.size == 0:
+        return csr_matrix(A.shape, dtype=data.dtype)
+
+    rows = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))[e]
+    k = key[e]
+
+    starts = np.flatnonzero(np.r_[True, rows[1:] != rows[:-1]])
+    seg_len = np.diff(np.r_[starts, k.size])
+    reducer = np.maximum if ascending else np.minimum
+    is_best = k == np.repeat(reducer.reduceat(k, starts), seg_len)
+
+    pos = np.flatnonzero(is_best)
+    seg_of = np.repeat(np.arange(starts.size), seg_len)[pos]
+    first = pos[np.r_[True, seg_of[1:] != seg_of[:-1]]]  # first max per row
+
+    best_e, best_rows = e[first], rows[first]
+    out_indptr = np.zeros(n + 1, dtype=indptr.dtype)
+    np.cumsum(np.bincount(best_rows, minlength=n), out=out_indptr[1:])
+    return csr_matrix((data[best_e], indices[best_e], out_indptr), shape=A.shape)
+
+
 def compute_gradients(adjacency, f, ascending=True, use_edge_gradients=False):
-    """
-    Build a gradient graph where each node points to its best neighbor by free.
-    """
-    adjacency = adjacency.tocoo()
-    n = adjacency.shape[0]
-    rows, cols, data = adjacency.row, adjacency.col, adjacency.data
-
-    if ascending:
-        mask = f[cols] > f[rows]
-    else:
-        mask = f[cols] < f[rows]
-
-    rows_m, cols_m, data_m = rows[mask], cols[mask], data[mask]
-
-    df = pd.DataFrame({"row": rows_m, "col": cols_m, "f": f[cols_m], "w": data_m})
-
-    sort_col = "w" if use_edge_gradients else "f"
-
-    if ascending:
-        idx = df.groupby("row")[sort_col].idxmax()
-    else:
-        idx = df.groupby("row")[sort_col].idxmin()
-
-    best_edges = df.loc[idx]
-
-    gradient = csr_matrix(
-        (
-            best_edges["w"].values,
-            (best_edges["row"].values, best_edges["col"].values),
-        ),
-        shape=adjacency.shape,
-    )
-
-    return gradient
+    A = adjacency.tocsr()
+    f_col = f[A.indices]
+    f_row = np.repeat(f, np.diff(A.indptr))
+    mask = (f_col > f_row) if ascending else (f_col < f_row)
+    del f_row
+    key = A.data if use_edge_gradients else f_col
+    return _best_edge_per_row(A, mask, key, ascending)
 
 
 def compute_incidence_gradients(
     adjacency, f_train, f_test, ascending=True, use_edge_gradients=False
 ):
-    """
-    Build a gradient graph where each node points to its best neighbor by free.
-    """
-    adjacency = adjacency.tocoo()
-    rows, cols, data = adjacency.row, adjacency.col, adjacency.data
-
-    if ascending:
-        mask = f_train[cols] > f_test[rows]
-    else:
-        mask = f_train[cols] < f_test[rows]
-
-    rows_m, cols_m, data_m = rows[mask], cols[mask], data[mask]
-
-    df = pd.DataFrame({"row": rows_m, "col": cols_m, "f": f_train[cols_m], "w": data_m})
-
-    sort_col = "w" if use_edge_gradients else "f"
-
-    if ascending:
-        idx = df.groupby("row")[sort_col].idxmax()
-    else:
-        idx = df.groupby("row")[sort_col].idxmin()
-
-    best_edges = df.loc[idx]
-
-    gradient = csr_matrix(
-        (
-            best_edges["w"].values,
-            (best_edges["row"].values, best_edges["col"].values),
-        ),
-        shape=adjacency.shape,
-    )
-
-    return gradient
+    A = adjacency.tocsr()
+    f_col = f_train[A.indices]
+    f_row = np.repeat(f_test, np.diff(A.indptr))
+    mask = (f_col > f_row) if ascending else (f_col < f_row)
+    del f_row
+    key = A.data if use_edge_gradients else f_col
+    return _best_edge_per_row(A, mask, key, ascending)
 
 
 def compute_saddles(adjacency, f, basin_assignment, ascending=True):
-    """
-    Collect candidate saddles between critical points based on shared edges.
+    A = adjacency.tocsr()
+    n = A.shape[0]
+    indptr, cols = A.indptr, A.indices
+    counts = np.diff(indptr)
 
-    Returns
-    -------
-    dict
-        Mapping from critical point pair to merge weight.
-    """
-    adjacency_csr = adjacency.tocsr()
-    n = adjacency_csr.shape[0]
-    row_counts = np.diff(adjacency_csr.indptr)
-    rows = np.repeat(np.arange(n), row_counts)
-    cols = adjacency_csr.indices
+    ba = np.asarray(basin_assignment)
+    B = int(ba.max()) + 1  # assumes basin ids >= 0
+    ba32 = ba.astype(np.int32 if B < 2**31 else np.int64, copy=False)
 
-    ru = basin_assignment[rows]
-    rv = basin_assignment[cols]
+    ru = np.repeat(ba32, counts)
+    rv = ba32[cols]
+    e = np.flatnonzero(ru != rv)  # cross-basin edges only
+    if e.size == 0:
+        return {}
 
-    mask = ru != rv
-    ru, rv = ru[mask], rv[mask]
-    rows, cols = rows[mask], cols[mask]
+    ru, rv, cols_m = ru[e], rv[e], cols[e]
+    rows_m = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))[e]
+    f_u, f_v = f[rows_m], f[cols_m]
+    h = np.minimum(f_u, f_v) if ascending else np.maximum(f_u, f_v)
 
-    f_u = f[rows]
-    f_v = f[cols]
+    lo = np.minimum(ru, rv).astype(np.int64)
+    hi = np.maximum(ru, rv).astype(np.int64)
+    key = lo * B + hi  # B*B < 2^63 for B up to ~3e9
 
-    if ascending:
-        h = np.minimum(f_u, f_v)
-    else:
-        h = np.maximum(f_u, f_v)
+    order = np.argsort(key, kind="stable")
+    ks, hs = key[order], h[order]
+    starts = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]])
+    reducer = np.maximum if ascending else np.minimum
+    vals = reducer.reduceat(hs, starts)
+    uk = ks[starts]
 
-    critical_point_pairs = np.column_stack([np.minimum(ru, rv), np.maximum(ru, rv)])
-
-    df = pd.DataFrame(
-        {"r1": critical_point_pairs[:, 0], "r2": critical_point_pairs[:, 1], "h": h}
-    )
-
-    if ascending:
-        result = df.groupby(["r1", "r2"], sort=False)["h"].max()
-    else:
-        result = df.groupby(["r1", "r2"], sort=False)["h"].min()
-
-    saddles = {(int(r1), int(r2)): float(val) for (r1, r2), val in result.items()}
-
-    return saddles
+    return dict(zip(zip((uk // B).tolist(), (uk % B).tolist()), vals.tolist()))
 
 
 def _saddles_to_csr(saddles) -> csr_matrix:
@@ -271,21 +239,18 @@ def build_merge_tree(critical_points, basin_assignment, f, saddles, ascending=Tr
     death = dict()
 
     mst_coo = mst.tocoo()
-    edges = [
-        (mst_coo.row[i], mst_coo.col[i], mst_coo.data[i])
-        for i in range(len(mst_coo.data))
-    ]
+    order = np.argsort(-mst_coo.data if ascending else mst_coo.data, kind="stable")
+    edges = list(
+        zip(
+            mst_coo.row[order].tolist(),
+            mst_coo.col[order].tolist(),
+            mst_coo.data[order].tolist(),
+        )
+    )
 
-    if ascending:
-        edges.sort(key=lambda x: x[2], reverse=True)
-    else:
-        edges.sort(key=lambda x: x[2])
-
-    unique_basins, cluster_sizes = np.unique(basin_assignment, return_counts=True)
-
-    cluster_size_map = {
-        int(basin): int(size) for basin, size in zip(unique_basins, cluster_sizes)
-    }
+    counts = np.bincount(basin_assignment)
+    nz = np.flatnonzero(counts)
+    cluster_size_map = dict(zip(nz.tolist(), counts[nz].tolist()))
 
     birth = {r: f[r] for r in critical_points}
 
@@ -857,10 +822,8 @@ def merge_disconnected_components(
             dtype=np.int64,
         )
 
-        for node in range(n_nodes):
-            node_label = new_labels[node]
-            if node_label != lab:
-                cluster_lookup[node] = node_label
+        cluster_lookup = new_labels.astype(np.int64)
+        cluster_lookup[new_labels == lab] = -1
 
         # Process smaller components.
         order = np.argsort(sizes)

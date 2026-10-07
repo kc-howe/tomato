@@ -2,7 +2,10 @@ import warnings
 from typing import Optional
 
 import numpy as np
+from numba import njit
 from scipy.sparse import csr_matrix, find
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.sparse.csgraph import shortest_path
 from scipy.signal import find_peaks
 from scipy import stats
@@ -14,6 +17,38 @@ from tomato._graph_utils import (
     get_connected_components,
     merge_disconnected_components,
 )
+
+
+@njit(cache=True)
+def components_per_label_uf(indptr, indices, labels, n_labels):
+    n = labels.shape[0]
+    parent = np.arange(n)
+    for u in range(n):
+        lu = labels[u]
+        if lu < 0:
+            continue
+        for p in range(indptr[u], indptr[u + 1]):
+            v = indices[p]
+            if labels[v] != lu:
+                continue
+            a = u
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            b = v
+            while parent[b] != b:
+                parent[b] = parent[parent[b]]
+                b = parent[b]
+            if a != b:
+                if a < b:
+                    parent[b] = a
+                else:
+                    parent[a] = b
+    counts = np.zeros(n_labels, np.int64)
+    for i in range(n):
+        if labels[i] >= 0 and parent[i] == i:
+            counts[labels[i]] += 1
+    return counts
 
 
 class ToMAToCore:
@@ -108,45 +143,78 @@ class ToMAToCore:
 
         return float(threshold)
 
-    def get_threshold_by_max_jump(self, z=3.0) -> float:
+    def _log_ratio_persistences(self) -> np.ndarray:
         """
-        Estimate a persistence threshold by finding the largest gap in persistence values
-        of clusters that actually get merged (appear as 'dead' in the merge tree).
+        Persistence measured as |log(death) - log(birth)| = |log(death / birth)|.
+
+        Works for both filtration directions (ascending: death > birth,
+        descending: birth > death). Requires strictly positive f values.
+        Non-finite entries (e.g. the essential class) come back as np.nan.
+        """
+        gp = self.graph_persistence_
+        if gp.diagram_ is None:
+            raise ValueError("Must call fit() before computing log-ratio persistences")
+
+        diagram = np.asarray(gp.diagram_, dtype=float)
+        birth, death = diagram[:, 0], diagram[:, 1]
+
+        finite = np.isfinite(birth) & np.isfinite(death)
+        if np.any(birth[finite] <= 0) or np.any(death[finite] <= 0):
+            raise ValueError(
+                "Ratio persistence needs strictly positive f values. "
+                "Shift/rescale f (e.g. f - f.min() + eps) or use a density instead."
+            )
+
+        out = np.full(diagram.shape[0], np.nan)
+        out[finite] = np.abs(np.log(death[finite]) - np.log(birth[finite]))
+        return out
+
+    def get_threshold_by_max_jump(self, z=1.0) -> float:
+        """
+        Estimate a raw persistence threshold from the earliest significant jump in
+        log-ratio persistence, log(death / birth), among classes that get merged.
 
         Returns
         -------
         float
-            Estimated threshold value.
+            Raw persistence threshold: `persistences_ >= threshold` selects the
+            kept classes. np.inf if there are too few classes to find a jump.
         """
-        if self.graph_persistence_.persistences_ is None:
+        gp = self.graph_persistence_
+        if gp.persistences_ is None:
             raise ValueError("Must call fit() before get_threshold_by_max_jump()")
 
-        sorted_persistences = np.sort(self.persistences_)[:-1]
-        diffs = np.diff(sorted_persistences)
+        p = np.asarray(gp.persistences_, dtype=float)
+        r = self._log_ratio_persistences()
 
+        finite = np.isfinite(p) & np.isfinite(r)
+        p, r = p[finite], r[finite]
+
+        order = np.argsort(r)[:-1]
+        r_s, p_s = r[order], p[order]
+
+        diffs = np.diff(r_s)
         if diffs.shape[0] < 2:
-            return np.mean(sorted_persistences)
+            return np.inf
 
-        peaks, properties = find_peaks(diffs, height=0)
+        padded = np.concatenate([[0.0], diffs, [0.0]])
+        peaks, properties = find_peaks(padded, height=0)
+        peaks = peaks - 1
         heights = properties["peak_heights"]
 
-        if diffs[-1] > diffs[-2]:
-            peaks = np.append(peaks, diffs.shape[0] - 1)
-            heights = np.append(heights, diffs[-1])
-
-        heights_z = (heights - diffs.mean()) / diffs.std()
-        heights_z_gt = heights_z > z
-        if not np.any(heights_z_gt):
-            max_jump_index = np.argmax(diffs)
+        std = diffs.std()
+        if std == 0:
+            max_jump_index = int(np.argmax(diffs))
         else:
-            max_jump_index = peaks[np.argmax(heights_z_gt)]
+            heights_z = (heights - diffs.mean()) / std
+            heights_z_gt = heights_z > z
+            if not np.any(heights_z_gt):
+                max_jump_index = int(np.argmax(diffs))
+            else:
+                max_jump_index = int(peaks[np.argmax(heights_z_gt)])
 
-        threshold = 0.5 * (
-            sorted_persistences[max_jump_index]
-            + sorted_persistences[max_jump_index + 1]
-        )
+        return float(0.5 * (p_s[max_jump_index] + p_s[max_jump_index + 1]))
 
-        return threshold
 
     def get_threshold_by_n_clusters(self, n_clusters: int) -> float:
         """
@@ -216,7 +284,14 @@ class ToMAToCore:
         )
         basin_assignment = get_assignment_parents(parent, basin_assignment)
 
-        unique_basins, labels = np.unique(basin_assignment, return_inverse=True)
+        if basin_assignment.min() >= 0:
+            present = np.zeros(max_critical + 1, dtype=bool)
+            present[basin_assignment] = True
+            unique_basins = np.flatnonzero(present)
+            remap = np.cumsum(present) - 1
+            labels = remap[basin_assignment]
+        else:
+            unique_basins, labels = np.unique(basin_assignment, return_inverse=True)
 
         if merge_disconnected:
             labels = self._merge_disconnected_labels(labels)
@@ -228,50 +303,57 @@ class ToMAToCore:
 
         return labels
 
+    def _get_sym_adjacency(self):
+        """Symmetrized adjacency, computed once per fitted GraphPersistence."""
+        gp = self.graph_persistence_
+        cache = getattr(self, "_sym_adj_cache", None)
+        if cache is None or cache[0] is not gp:
+            A = gp.adjacency
+            A = A.maximum(A.T).tocsr()
+            self._sym_adj_cache = (gp, A)
+        return self._sym_adj_cache[1]
+
+    def _components_per_label(self, adjacency, labels):
+        indptr, indices = adjacency.indptr, adjacency.indices
+        lab_row = np.repeat(labels, np.diff(indptr))
+        same = (lab_row == labels[indices]) & (lab_row >= 0)
+        del lab_row
+
+        sub = csr_matrix((same.astype(np.int8), indices, indptr), shape=adjacency.shape)
+        sub.eliminate_zeros()
+
+        _, comp = connected_components(sub, directed=True, connection="strong")
+
+        comp_label = np.full(comp.max() + 1, -1, dtype=np.int64)
+        comp_label[comp] = labels
+        comp_label = comp_label[comp_label >= 0]
+        return np.bincount(comp_label, minlength=labels.max() + 1)
+
     def _merge_disconnected_labels(self, labels: np.ndarray) -> np.ndarray:
-        """
-        Ensure that all points sharing a label are connected in the graph.
-        When a label would merge into disconnected components, merge smaller
-        components into their nearest neighboring clusters (by graph distance).
-
-        Parameters
-        ----------
-        labels : ndarray
-            Initial cluster labels (may contain disconnected points).
-
-        Returns
-        -------
-        labels_fixed : ndarray
-            Cluster labels where all points in a cluster are connected.
-        """
-        adjacency = self.graph_persistence_.adjacency
-        adjacency = adjacency.maximum(adjacency.T)
-        unique_labels = np.unique(labels[labels >= 0])
+        A = self.graph_persistence_.adjacency.tocsr()
+        labels = np.asarray(labels, dtype=np.int64)
+        n_comp = components_per_label_uf(
+            A.indptr, A.indices, labels, int(labels.max()) + 1
+        )
+        bad_labels = np.flatnonzero(n_comp > 1)
 
         if self.verbose:
-            disconnected_info = {}
-            for lab in unique_labels:
-                mask = labels == lab
-                if mask.sum() <= 1:
-                    continue
-
-                comp_id, ncomp = get_connected_components(
-                    adjacency.indptr, adjacency.indices, mask
-                )
-                if ncomp > 1:
-                    disconnected_info[lab] = ncomp
-            if disconnected_info:
+            if bad_labels.size:
                 print(
-                    f"[ToMATo] Found {len(disconnected_info)} labels with disconnected components:"
+                    f"[ToMATo] Found {bad_labels.size} labels with disconnected components:"
                 )
-                for lab, n_comps in sorted(disconnected_info.items()):
-                    print(f"[ToMATo]   Label {lab}: {n_comps} components")
-                print(f"[ToMATo] Merging disconnected label components...")
+                for lab in bad_labels:
+                    print(f"[ToMATo]   Label {lab}: {n_comp[lab]} components")
+                print("[ToMATo] Merging disconnected label components...")
             else:
-                print(f"[ToMATo] All labels are connected")
+                print("[ToMATo] All labels are connected")
 
+        if bad_labels.size == 0:
+            return labels
+
+        adj = self._get_sym_adjacency()
         new_labels = merge_disconnected_components(
-            labels, adjacency.indptr, adjacency.indices, unique_labels
+            labels, adj.indptr, adj.indices, bad_labels
         )
 
         if self.verbose:
@@ -349,18 +431,20 @@ class ToMAToCore:
         """
         Ensure that non-negative labels are contiguous in [0, 1, 2, ...].
         """
-        if np.all(self.labels_ == -1) or np.all(self.labels_ == 0):
+        labels = self.labels_
+        mask = labels >= 0
+
+        if not mask.any():
             return
 
-        unique_labels = np.unique(self.labels_[self.labels_ >= 0])
-        label_map = np.arange(len(unique_labels), dtype=self.labels_.dtype)
+        lab = labels[mask].astype(np.int64, copy=False)
+        present = np.bincount(lab) > 0
 
-        max_label = unique_labels.max() + 1
-        mapping = np.full(max_label, -1, dtype=self.labels_.dtype)
-        mapping[unique_labels] = label_map
+        if present.all():
+            return
 
-        mask = self.labels_ >= 0
-        self.labels_[mask] = mapping[self.labels_[mask]]
+        mapping = np.cumsum(present) - 1
+        labels[mask] = mapping[lab]
 
         return
 
@@ -402,42 +486,22 @@ class ToMAToCore:
 
         return new_labels
 
-    def assignment_probabilities(self, labels: np.ndarray = None) -> np.ndarray:
-        """
-        Return assignment probabilities for a given set of labels.
-
-        Parameters
-        ----------
-        labels : np.ndarray
-            Array of cluster labels..
-
-        Returns
-        -------
-        probabilities : np.ndarray
-            Label assignment probabilities.
-        """
+    def assignment_probabilities(self, labels=None):
         if labels is None:
             labels = self.labels_
-
-        unique_labels = np.unique(labels)
-        f_vals = self.graph_persistence_.f
-        probabilities = np.zeros(labels.shape, dtype=np.float32)
-
-        for label in unique_labels:
-            if label == -1:
-                continue
-            label_mask = labels == label
-            label_mode = f_vals[label_mask].mean()
-            if self.ascending:
-                probabilities[label_mask] = (
-                    np.minimum(f_vals[label_mask], label_mode) / label_mode
-                )
-            else:
-                probabilities[label_mask] = label_mode / np.maximum(
-                    f_vals[label_mask], label_mode
-                )
-
-        return probabilities
+        f = self.graph_persistence_.f
+        valid = labels >= 0
+        lab = labels[valid].astype(np.int64, copy=False)
+        sums = np.bincount(lab, weights=f[valid])
+        counts = np.bincount(lab)
+        mode = sums / np.maximum(counts, 1)
+        m = mode[lab]
+        p = np.zeros(labels.shape, dtype=np.float32)
+        if self.ascending:
+            p[valid] = np.minimum(f[valid], m) / m
+        else:
+            p[valid] = m / np.maximum(f[valid], m)
+        return p
 
     def full_assignment_probabilities(
         self, labels: np.ndarray = None, temperature: float = 1.0

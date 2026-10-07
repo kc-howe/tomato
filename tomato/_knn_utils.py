@@ -8,6 +8,15 @@ from scipy.spatial.ckdtree import cKDTree
 from sklearn.neighbors import NearestNeighbors
 
 
+@njit(parallel=True, cache=True)
+def _sort_rows(indices, data, indptr):
+    for i in prange(indptr.shape[0] - 1):
+        s, e = indptr[i], indptr[i + 1]
+        order = np.argsort(indices[s:e])
+        indices[s:e] = indices[s:e][order]
+        data[s:e] = data[s:e][order]
+
+
 def compute_core_distances(knn_graph=None) -> np.ndarray:
     """
     Compute core distances for each point.
@@ -206,15 +215,25 @@ def knn_to_csr(
         Sparse kNN matrix of shape (n_samples, n_cols).
     """
     n_samples, k = knn_indices.shape
-
     if n_cols is None:
         n_cols = n_samples
 
-    rows = np.repeat(np.arange(n_samples), k)
-    cols = knn_indices.ravel()
-    if distance_weights:
-        data = knn_dists.ravel()
-    else:
-        data = np.ones_like(cols, dtype=float)
+    nnz = n_samples * k
+    idx_dtype = np.int32 if max(nnz, n_cols) < 2**31 else np.int64
 
-    return csr_matrix((data, (rows, cols)), shape=(n_samples, n_cols))
+    indices = np.ascontiguousarray(knn_indices, dtype=idx_dtype).ravel()
+
+    if nnz and (indices.min() < 0 or indices.max() >= n_cols):
+        raise ValueError("knn_indices contain out-of-range column indices")
+
+    indptr = np.arange(0, nnz + 1, k, dtype=idx_dtype)
+    if distance_weights:
+        data = np.ascontiguousarray(knn_dists, dtype=np.float64).ravel()
+    else:
+        data = np.ones(nnz, dtype=np.float64)
+
+    A = csr_matrix((data, indices, indptr), shape=(n_samples, n_cols))
+    _sort_rows(A.indices, A.data, A.indptr)
+    A.has_sorted_indices = True
+    A.sum_duplicates()
+    return A
