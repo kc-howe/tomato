@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytomato"
-version = "0.4.3"
+version = "0.4.4"
 description = "Topological Mode Analysis Tool for fast, persistent, density-based clustering."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -17,6 +17,8 @@ dependencies = [
     "pynndescent",
     "matplotlib",
 ]
+
+license = { file = "LICENSE" }
 
 [project.urls]
 Homepage = "https://github.com/kc-howe/tomato"

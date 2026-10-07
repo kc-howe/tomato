@@ -4,7 +4,7 @@
 
 **Author**: Kenneth Howe
 
-**Version**: 0.4.3
+**Version**: 0.4.4
 
 </br>
 
@@ -26,7 +26,7 @@ ToMATo was introduced in 2011 by Chazal, et al.:
 <p align="center">
   <figure style="text-align: center;">
     <img src="https://raw.githubusercontent.com/kc-howe/tomato/main/docs/images/tomato-example.png", width=800 />
-    <figcaption>ToMAToSCAN Example Clustering.</figcaption>
+    <figcaption>ToMATo Example Clustering.</figcaption>
   </figure>
 </p>
 
@@ -180,3 +180,7 @@ Extended to 1.5 million data points, ToMATo maintains near-linear scaling with r
 </p>
 
 *Timing and plotting code adapted from the [HDBSCAN repository](https://github.com/scikit-learn-contrib/hdbscan/blob/master/notebooks/Benchmarking%20scalability%20of%20clustering%20implementations-v0.7.ipynb).*
+
+## License
+
+ToMATo is released under the MIT License. See `LICENSE` for the full license text.
