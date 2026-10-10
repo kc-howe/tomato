@@ -63,6 +63,7 @@ class ToMATo(ToMAToCore):
         n_neighbors: int = 25,
         metric: str = "euclidean",
         dtm_weighted: bool = False,
+        cluster_selection_method: Optional[str] = None,
         persistence_threshold: Optional[float] = None,
         noise_aware: bool = False,
         use_approximate_knn: bool = False,
@@ -75,6 +76,7 @@ class ToMATo(ToMAToCore):
         verbose: bool = False,
     ) -> None:
         super().__init__(
+            cluster_selection_method=cluster_selection_method,
             sig=None,
             persistence_threshold=persistence_threshold,
             noise_aware=noise_aware,
@@ -134,7 +136,6 @@ class ToMATo(ToMAToCore):
             raise ValueError(f"Point {bad} has no neighbors in the graph.")
 
         sq_sums = np.add.reduceat(graph.data**2, graph.indptr[:-1])
-        # sq_sums = np.bincount(graph.tocoo().row, weights=graph.data**2, minlength=n_samples)
 
         dtm = np.sqrt(sq_sums / counts)
 

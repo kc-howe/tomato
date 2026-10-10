@@ -142,6 +142,7 @@ class GeoToMATo(ToMAToCore):
         include_self: bool = True,
         sample_weight: Optional[np.ndarray] = None,
         persistence_threshold: Optional[float] = None,
+        cluster_selection_method: Optional[str] = None,
         noise_aware: bool = False,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
@@ -151,6 +152,7 @@ class GeoToMATo(ToMAToCore):
         super().__init__(
             sig=None,
             persistence_threshold=persistence_threshold,
+            cluster_selection_method=cluster_selection_method,
             noise_aware=noise_aware,
             n_clusters=n_clusters,
             min_clusters=min_clusters,
@@ -167,6 +169,7 @@ class GeoToMATo(ToMAToCore):
         self.min_neighbors = min_neighbors
         self.include_self = include_self
         self.sample_weight = sample_weight
+        
         self.drop_duplicates = drop_duplicates
 
     @staticmethod

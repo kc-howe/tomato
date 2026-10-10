@@ -941,3 +941,35 @@ def csr_nonzero_argmin(matrix: csr_matrix) -> np.ndarray:
         result[i] = matrix.indices[start:end][nonzero_mask][local_idx]
 
     return result
+
+
+@njit(cache=True)
+def components_per_label_uf(indptr, indices, labels, n_labels):
+    n = labels.shape[0]
+    parent = np.arange(n)
+    for u in range(n):
+        lu = labels[u]
+        if lu < 0:
+            continue
+        for p in range(indptr[u], indptr[u + 1]):
+            v = indices[p]
+            if labels[v] != lu:
+                continue
+            a = u
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            b = v
+            while parent[b] != b:
+                parent[b] = parent[parent[b]]
+                b = parent[b]
+            if a != b:
+                if a < b:
+                    parent[b] = a
+                else:
+                    parent[a] = b
+    counts = np.zeros(n_labels, np.int64)
+    for i in range(n):
+        if labels[i] >= 0 and parent[i] == i:
+            counts[labels[i]] += 1
+    return counts

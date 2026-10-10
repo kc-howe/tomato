@@ -1,54 +1,27 @@
-import warnings
 from typing import Optional
 
 import numpy as np
 from numba import njit
 from scipy.sparse import csr_matrix, find
-from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse.csgraph import shortest_path
-from scipy.signal import find_peaks
-from scipy import stats
 
+from tomato.cluster_selection import (
+    DEFAULT_ALPHA,
+    resolve_cluster_selection_method,
+    threshold_by_max_jump,
+    threshold_by_n_clusters,
+    threshold_by_profile_likelihood,
+    threshold_by_significance,
+    validate_cluster_selection_method,
+)
 from tomato.graph_persistence import GraphPersistence
 from tomato._graph_utils import (
     compute_incidence_gradients,
     get_assignment_parents,
-    get_connected_components,
+    components_per_label_uf,
     merge_disconnected_components,
 )
-
-
-@njit(cache=True)
-def components_per_label_uf(indptr, indices, labels, n_labels):
-    n = labels.shape[0]
-    parent = np.arange(n)
-    for u in range(n):
-        lu = labels[u]
-        if lu < 0:
-            continue
-        for p in range(indptr[u], indptr[u + 1]):
-            v = indices[p]
-            if labels[v] != lu:
-                continue
-            a = u
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            b = v
-            while parent[b] != b:
-                parent[b] = parent[parent[b]]
-                b = parent[b]
-            if a != b:
-                if a < b:
-                    parent[b] = a
-                else:
-                    parent[a] = b
-    counts = np.zeros(n_labels, np.int64)
-    for i in range(n):
-        if labels[i] >= 0 and parent[i] == i:
-            counts[labels[i]] += 1
-    return counts
 
 
 class ToMAToCore:
@@ -59,15 +32,30 @@ class ToMAToCore:
 
     Parameters
     ----------
+    cluster_selection_method : str or None
+        Method used to choose the persistence threshold. One of:
+            * "profile_likelihood": profile-likelihood split of the log-ratio
+            persistences, accepted only if significant, otherwise the largest raw jump.
+            * "max_jump": split at the largest gap by gap statistic.
+            * "significance": exponential outlier threshold at significance level sig.
+            * "persistence_threshold": use persistence_threshold directly.
+            * "n_clusters": use the threshold that yields n_clusters clusters.
+        An explicit method is used as given and the other parameters are not
+        checked. If None (default), the method is inferred at fit time: n_clusters,
+        persistence_threshold or sig select the matching method (in that order of
+        precedence, with a warning if more than one is set), and
+        "profile_likelihood" is used if none is set.
     sig : float or None
         Significance level for exponential outlier detection (e.g., 0.01 for 1%).
-        If provided, used to automatically determine persistence threshold.
+        Required when cluster_selection_method is "significance".
     persistence_threshold : float or None
-        If provided, used directly as the default persistence threshold.
+        Persistence threshold used directly. Required when
+        cluster_selection_method is "persistence_threshold".
     noise_aware: bool
         Detect noise points and assign a label of -1.
     n_clusters : int or None
-        Number of clusters to maintain (overrides threshold if needed).
+        Number of clusters to maintain. Required when cluster_selection_method
+        is "n_clusters".
     min_clusters: int or None
         Minimum number of clusters to maintain (overrides threshold if needed).
     ascending : bool
@@ -84,6 +72,7 @@ class ToMAToCore:
         self,
         sig: Optional[float] = None,
         persistence_threshold: Optional[float] = None,
+        cluster_selection_method: Optional[str] = None,
         noise_aware: bool = False,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
@@ -92,10 +81,11 @@ class ToMAToCore:
         use_edge_gradients: bool = False,
         verbose: bool = False,
     ) -> None:
-        if sig is not None and persistence_threshold is not None:
-            raise ValueError("Specify only one of sig or persistence_threshold.")
         self.sig = sig
         self.persistence_threshold = persistence_threshold
+        if cluster_selection_method is not None:
+            validate_cluster_selection_method(cluster_selection_method)
+        self.cluster_selection_method = cluster_selection_method
         self.noise_aware = noise_aware
         self.n_clusters = n_clusters
         self.min_clusters = min_clusters
@@ -103,7 +93,27 @@ class ToMAToCore:
         self.use_stability = use_stability
         self.use_edge_gradients = use_edge_gradients
         self.verbose = verbose
+        self._validate_selection_parameters()
         return
+
+    def _validate_selection_parameters(self) -> None:
+        """
+        Check that the parameter required by cluster_selection_method is set.
+        """
+        required = {
+            "significance": ("sig", self.sig),
+            "persistence_threshold": (
+                "persistence_threshold",
+                self.persistence_threshold,
+            ),
+            "n_clusters": ("n_clusters", self.n_clusters),
+        }
+        name, value = required.get(self.cluster_selection_method, (None, True))
+        if value is None:
+            raise ValueError(
+                f"cluster_selection_method='{self.cluster_selection_method}' "
+                f"requires {name} to be set."
+            )
 
     def _degrees(self, A: csr_matrix) -> np.ndarray:
         """
@@ -124,140 +134,60 @@ class ToMAToCore:
     def get_threshold_by_significance(self, sig: float) -> float:
         """
         Estimate a persistence threshold from an exponential fit.
-
-        Parameters
-        ----------
-        sig : float
-            Significance level (e.g., 0.01 for 1%).
-
-        Returns
-        -------
-        float
-            Estimated threshold value.
         """
-        if self.graph_persistence_.persistences_ is None:
-            raise ValueError("Must call fit() before get_threshold_by_significance()")
-
-        scale = self.graph_persistence_.persistences_.mean()
-        threshold = stats.expon.ppf(1 - sig, scale=scale)
-
-        return float(threshold)
-
-    def _log_ratio_persistences(self) -> np.ndarray:
-        """
-        Persistence measured as |log(death) - log(birth)| = |log(death / birth)|.
-
-        Works for both filtration directions (ascending: death > birth,
-        descending: birth > death). Requires strictly positive f values.
-        Non-finite entries (e.g. the essential class) come back as np.nan.
-        """
-        gp = self.graph_persistence_
-        if gp.diagram_ is None:
-            raise ValueError("Must call fit() before computing log-ratio persistences")
-
-        diagram = np.asarray(gp.diagram_, dtype=float)
-        birth, death = diagram[:, 0], diagram[:, 1]
-
-        finite = np.isfinite(birth) & np.isfinite(death)
-        if np.any(birth[finite] <= 0) or np.any(death[finite] <= 0):
-            raise ValueError(
-                "Ratio persistence needs strictly positive f values. "
-                "Shift/rescale f (e.g. f - f.min() + eps) or use a density instead."
-            )
-
-        out = np.full(diagram.shape[0], np.nan)
-        out[finite] = np.abs(np.log(death[finite]) - np.log(birth[finite]))
-        return out
-
-    def get_threshold_by_max_jump(self, z=1.0) -> float:
-        """
-        Estimate a raw persistence threshold from the earliest significant jump in
-        log-ratio persistence, log(death / birth), among classes that get merged.
-
-        Returns
-        -------
-        float
-            Raw persistence threshold: `persistences_ >= threshold` selects the
-            kept classes. np.inf if there are too few classes to find a jump.
-        """
-        gp = self.graph_persistence_
-        if gp.persistences_ is None:
-            raise ValueError("Must call fit() before get_threshold_by_max_jump()")
-
-        p = np.asarray(gp.persistences_, dtype=float)
-        r = self._log_ratio_persistences()
-
-        finite = np.isfinite(p) & np.isfinite(r)
-        p, r = p[finite], r[finite]
-
-        order = np.argsort(r)[:-1]
-        r_s, p_s = r[order], p[order]
-
-        diffs = np.diff(r_s)
-        if diffs.shape[0] < 2:
-            return np.inf
-
-        padded = np.concatenate([[0.0], diffs, [0.0]])
-        peaks, properties = find_peaks(padded, height=0)
-        peaks = peaks - 1
-        heights = properties["peak_heights"]
-
-        std = diffs.std()
-        if std == 0:
-            max_jump_index = int(np.argmax(diffs))
-        else:
-            heights_z = (heights - diffs.mean()) / std
-            heights_z_gt = heights_z > z
-            if not np.any(heights_z_gt):
-                max_jump_index = int(np.argmax(diffs))
-            else:
-                max_jump_index = int(peaks[np.argmax(heights_z_gt)])
-
-        return float(0.5 * (p_s[max_jump_index] + p_s[max_jump_index + 1]))
-
+        return threshold_by_significance(self.graph_persistence_.persistences_, sig)
 
     def get_threshold_by_n_clusters(self, n_clusters: int) -> float:
         """
         Estimate a persistence threshold to yield at least n_clusters.
-
-        Parameters
-        ----------
-        n_clusters : int
-            Desired minimum number of clusters.
-
-        Returns
-        -------
-        float
-            Threshold value between two adjacent persistences.
         """
-        if self.graph_persistence_.persistences_ is None:
-            raise ValueError("Must call fit() before get_threshold_by_n_clusters()")
+        gp = self.graph_persistence_
+        return threshold_by_n_clusters(
+            gp.persistences_, n_clusters, gp.n_critical_points, verbose=self.verbose
+        )
 
-        n_modes = self.graph_persistence_.n_critical_points
-        if n_clusters > n_modes:
-            warnings.warn(
-                "n_clusters exceeds number of detectable modes. "
-                + f"Returning {n_modes} clusters."
+    def get_threshold_by_profile_likelihood(self, alpha: float = DEFAULT_ALPHA):
+        """
+        Profile-likelihood split of log-ratio persistences, accepted if its
+        gap p-value is <= alpha; otherwise the largest raw jump.
+        Sets split_method_ and split_pvalue_.
+        """
+        gp = self.graph_persistence_
+        if gp.persistences_ is None:
+            raise ValueError(
+                "Must call fit() before get_threshold_by_profile_likelihood()"
             )
-            threshold = 0.0
-            return threshold
+        res = threshold_by_profile_likelihood(gp.persistences_, gp.diagram_, alpha)
+        self.split_method_ = res.method
+        self.split_pvalue_ = res.pvalue
+        return res.threshold
 
-        if n_clusters == self.graph_persistence_.n_critical_points:
-            threshold = 0.0
-            return threshold
+    def get_threshold_by_max_jump(self):
+        """
+        Split at the largest gap by gap statistic.
+        Sets split_method_ and split_pvalue_ (always NaN: the null
+        distribution is calibrated for the profile-likelihood split, not the max).
+        """
+        gp = self.graph_persistence_
+        if gp.persistences_ is None:
+            raise ValueError("Must call fit() before get_threshold_by_max_jump()")
+        res = threshold_by_max_jump(gp.persistences_, gp.diagram_)
+        self.split_method_ = res.method
+        self.split_pvalue_ = res.pvalue
+        return res.threshold
 
-        sorted_persistences = np.flip(np.sort(self.graph_persistence_.persistences_))
-        threshold_upper = sorted_persistences[n_clusters - 1]
-        threshold_lower = sorted_persistences[n_clusters]
-        threshold = 0.5 * (threshold_upper + threshold_lower)
-
-        if self.verbose:
-            print(f"[ToMATo] Cluster threshold for {n_clusters} clusters: {threshold}")
-            print(
-                f"[ToMATo] Clusters above threshold: {(sorted_persistences > threshold).sum()}"
-            )
-
-        return threshold
+    def _select_threshold(self) -> float:
+        """
+        Return the persistence threshold given by the resolved selection method.
+        """
+        methods = {
+            "profile_likelihood": self.get_threshold_by_profile_likelihood,
+            "max_jump": self.get_threshold_by_max_jump,
+            "significance": lambda: self.get_threshold_by_significance(self.sig),
+            "persistence_threshold": lambda: self.persistence_threshold,
+            "n_clusters": lambda: self.get_threshold_by_n_clusters(self.n_clusters),
+        }
+        return methods[self.cluster_selection_method_]()
 
     def get_labels_by_threshold(
         self,
@@ -304,7 +234,9 @@ class ToMAToCore:
         return labels
 
     def _get_sym_adjacency(self):
-        """Symmetrized adjacency, computed once per fitted GraphPersistence."""
+        """
+        Symmetrized adjacency, computed once per fitted GraphPersistence.
+        """
         gp = self.graph_persistence_
         cache = getattr(self, "_sym_adj_cache", None)
         if cache is None or cache[0] is not gp:
@@ -365,46 +297,38 @@ class ToMAToCore:
 
     def _assign_default_labels(self):
         """
-        Assign default cluster labels based on significance or threshold.
+        Assign default cluster labels using the configured cluster selection method.
 
-        Sets `self.labels_` and `self.modes_` according to the
-        configured `persistence_threshold`, `sig`, or `n_clusters`.
+        Sets `self.labels_` and `self.modes_` from the threshold chosen by the
+        resolved cluster selection method (`self.cluster_selection_method_`).
         """
+        self.cluster_selection_method_ = resolve_cluster_selection_method(
+            self.cluster_selection_method,
+            n_clusters=self.n_clusters,
+            persistence_threshold=self.persistence_threshold,
+            sig=self.sig,
+        )
+
         if self.all_modes_.shape[0] == 1:
             self.threshold_ = np.inf
             labels, critical_points = np.zeros(
                 self.f_.shape[0]
             ), self.all_modes_.astype(int)
-        elif self.n_clusters is not None:
-            if self.verbose:
-                print(f"[ToMATo] Targeting n_clusters={self.n_clusters}")
-            self.threshold_ = self.get_threshold_by_n_clusters(self.n_clusters)
-            labels, critical_points = self.get_labels_by_threshold(
-                self.threshold_, return_critical_points=True
-            )
-        elif self.persistence_threshold is not None:
-            self.threshold_ = self.persistence_threshold
-            if self.verbose:
-                print(f"[ToMATo] Using persistence threshold: {self.threshold_:.6f}")
-            labels, critical_points = self.get_labels_by_threshold(
-                self.persistence_threshold, return_critical_points=True
-            )
-        elif self.sig is not None:
-            self.threshold_ = self.get_threshold_by_significance(self.sig)
-            if self.verbose:
-                print(f"[ToMATo] Significance-based threshold: {self.threshold_:.6f}")
-            labels, critical_points = self.get_labels_by_threshold(
-                self.threshold_, return_critical_points=True
-            )
         else:
-            self.threshold_ = self.get_threshold_by_max_jump()
+            self.threshold_ = self._select_threshold()
             if self.verbose:
-                print(f"[ToMATo] Max-jump threshold: {self.threshold_:.6f}")
+                print(
+                    f"[ToMATo] Threshold from {self.cluster_selection_method_}: "
+                    f"{self.threshold_:.6f}"
+                )
             labels, critical_points = self.get_labels_by_threshold(
                 self.threshold_, return_critical_points=True
             )
 
-        if self.min_clusters is not None and self.n_clusters is None:
+        if (
+            self.min_clusters is not None
+            and self.cluster_selection_method_ != "n_clusters"
+        ):
             current_n = len(np.unique(labels[labels >= 0]))
             if current_n < self.min_clusters:
                 if self.verbose:
