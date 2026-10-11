@@ -39,7 +39,6 @@ class GraphPersistence:
         self.persistence = None
         self.diagram_ = None
         self.persistences_ = None
-        self.cluster_sizes_ = None
         return
 
     def _compute_gradients(self):

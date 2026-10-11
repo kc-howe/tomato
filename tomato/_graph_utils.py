@@ -287,98 +287,6 @@ def build_merge_tree(critical_points, basin_assignment, f, saddles, ascending=Tr
     return saddle, mst, merge_tree, death, cluster_size_map
 
 
-def build_merge_tree_old(critical_points, basin_assignment, f, saddles, ascending=True):
-    """
-    Construct the final merge tree from condensed graph edges.
-
-    Parameters
-    ----------
-    critical_points : ndarray
-        Indices of critical points
-    basin_assignment : ndarray
-        Basin assignment of each node to critical point
-    f : ndarray
-        Function values per node
-    saddles : dict
-        Mapping of (cp1, cp2) to saddle height
-    ascending : bool, default=True
-        If True, merge tree for ascending case; else descending
-
-    Returns
-    -------
-    saddle : csr_matrix
-        Symmetric saddle matrix
-    mst : csr_matrix
-        Minimum spanning tree of saddles
-    merge_tree : list
-        List of merge tuples (dead, survivor, h, merged_size)
-    death : dict
-        Mapping of critical point to death value (saddle height)
-    cluster_size_map : dict
-        Final cluster sizes after all merges
-    """
-
-    saddle = _saddles_to_csr(saddles)
-    if ascending:
-        saddle_sym = saddle.maximum(saddle.T)
-        saddle_sym.data = -saddle_sym.data
-        saddle = saddle_sym
-
-    mst = minimum_spanning_tree(saddle)
-
-    if ascending:
-        mst.data = -mst.data
-
-    parent = {r: r for r in critical_points}
-
-    merge_tree = []
-    death = dict()
-
-    mst_coo = mst.tocoo()
-    edges = [
-        (mst_coo.row[i], mst_coo.col[i], mst_coo.data[i])
-        for i in range(len(mst_coo.data))
-    ]
-
-    if ascending:
-        edges.sort(key=lambda x: x[2], reverse=True)
-    else:
-        edges.sort(key=lambda x: x[2])
-
-    unique_basins, cluster_sizes = np.unique(basin_assignment, return_counts=True)
-
-    cluster_size_map = {
-        int(basin): int(size) for basin, size in zip(unique_basins, cluster_sizes)
-    }
-
-    birth = {r: f[r] for r in critical_points}
-
-    for r1, r2, h in edges:
-        r1_basin = find(r1, parent)
-        r2_basin = find(r2, parent)
-        if r1_basin == r2_basin:
-            continue
-
-        if birth[r1_basin] >= birth[r2_basin]:
-            survivor, dead = r1_basin, r2_basin
-        else:
-            survivor, dead = r2_basin, r1_basin
-
-        dead_size = cluster_size_map[dead]
-        survivor_size = cluster_size_map[survivor]
-        merged_size = dead_size + survivor_size
-
-        cluster_size_map[survivor] = merged_size
-        del cluster_size_map[dead]
-
-        parent[dead] = survivor
-        birth[survivor] = max(birth[survivor], birth[dead])
-        death[dead] = h
-        merge_tree.append((dead, survivor, h, merged_size))
-
-    return saddle, mst, merge_tree, death, cluster_size_map
-
-
 def compute_persistence(f, death, critical_points, ascending=True):
     """
     Compute a persistence diagram from critical_point degrees and persistence.
@@ -466,7 +374,7 @@ def compute_stabilities(
     )
 
     cluster_size_dict = {
-        dead: merged_size for dead, survivor, h, merged_size in merge_tree
+        dead: merged_size for dead, _, _, merged_size in merge_tree
     }
 
     unique_basins, counts = np.unique(basin_assignment, return_counts=True)
@@ -685,72 +593,6 @@ def merge_components(
 
 
 @njit
-def _find_nearest_cluster(comp_nodes, cluster_lookup, indptr, indices, n_nodes):
-    """
-    Use BFS from component nodes to find the nearest cluster using a lookup array.
-    Fast Numba-compiled version.
-
-    Parameters
-    ----------
-    comp_nodes : ndarray
-        Indices of nodes in the disconnected component.
-    cluster_lookup : ndarray
-        Array where cluster_lookup[node] = cluster_label (for nodes not in component, -1).
-    indptr : ndarray
-        CSR matrix indptr array.
-    indices : ndarray
-        CSR matrix indices array.
-    n_nodes : int
-        Total number of nodes (for array bounds).
-
-    Returns
-    -------
-    nearest_label : int
-        Label of the nearest cluster, or -1 if none found.
-    distance : int
-        Distance to the nearest cluster.
-    """
-    visited = np.zeros(n_nodes, dtype=np.bool_)
-    queue = np.empty(n_nodes, dtype=np.int64)
-    queue_size = 0
-
-    for node in comp_nodes:
-        visited[node] = True
-        queue[queue_size] = node
-        queue_size += 1
-
-    distance = 0
-
-    while queue_size > 0:
-        next_queue_size = 0
-        next_queue = np.empty(n_nodes, dtype=np.int64)
-        distance += 1
-
-        for i in range(queue_size):
-            node = queue[i]
-            start = indptr[node]
-            end = indptr[node + 1]
-
-            for ptr in range(start, end):
-                neighbor = indices[ptr]
-                if visited[neighbor]:
-                    continue
-                visited[neighbor] = True
-
-                label = cluster_lookup[neighbor]
-                if label >= 0:
-                    return label, distance
-
-                next_queue[next_queue_size] = neighbor
-                next_queue_size += 1
-
-        queue = next_queue
-        queue_size = next_queue_size
-
-    return -1, -1
-
-
-@njit
 def _find_adjacent_cluster(
     comp_nodes,
     cluster_lookup,
@@ -815,13 +657,6 @@ def merge_disconnected_components(
 
         keep_comp = sizes.argmax()
 
-        # Map every node outside this label to its current label.
-        cluster_lookup = np.full(
-            n_nodes,
-            -1,
-            dtype=np.int64,
-        )
-
         cluster_lookup = new_labels.astype(np.int64)
         cluster_lookup[new_labels == lab] = -1
 
@@ -845,102 +680,6 @@ def merge_disconnected_components(
                 new_labels[comp_nodes] = target
 
     return new_labels
-
-
-def merge_disconnected_components_old(labels, indptr, indices, unique_labels):
-    """
-    Process a label that has disconnected components. Keep the largest
-    component and merge smaller ones into their nearest neighboring clusters.
-
-    Parameters
-    ----------
-    labels : ndarray
-        Current cluster labels.
-    indptr : ndarray
-        CSR matrix indptr array.
-    indices : ndarray
-        CSR matrix indices array.
-    unique_labels : ndarray
-        Array of unique labels to process.
-
-    Returns
-    -------
-    new_labels : ndarray
-        Modified labels with disconnected components merged to neighbors.
-    """
-    new_labels = labels.copy()
-    n_nodes = labels.shape[0]
-
-    for lab in unique_labels:
-        mask = labels == lab
-        if mask.sum() <= 1:
-            continue
-
-        comp_id, ncomp = get_connected_components(indptr, indices, mask)
-        if ncomp <= 1:
-            continue
-
-        valid = comp_id >= 0
-        sizes = np.bincount(comp_id[valid], minlength=ncomp)
-        keep_comp = sizes.argmax()
-
-        is_valid = comp_id != -1
-        is_keep = comp_id == keep_comp
-        new_labels[is_valid & is_keep] = lab
-
-        cluster_lookup = np.full(n_nodes, -1, dtype=np.int64)
-        for other_lab in unique_labels:
-            if other_lab == lab:
-                continue
-            other_mask = new_labels == other_lab
-            if other_mask.any():
-                other_nodes = np.where(other_mask)[0]
-                for node in other_nodes:
-                    cluster_lookup[node] = other_lab
-
-        for comp_idx in range(ncomp):
-            if comp_idx == keep_comp:
-                continue
-
-            comp_mask = comp_id == comp_idx
-            if not comp_mask.any():
-                continue
-
-            comp_nodes = np.where(comp_mask)[0]
-            nearest_label, _ = _find_nearest_cluster(
-                comp_nodes, cluster_lookup, indptr, indices, n_nodes
-            )
-
-            if nearest_label >= 0:
-                new_labels[comp_mask] = nearest_label
-            else:
-                new_labels[comp_mask] = lab
-
-    return new_labels
-
-
-def csr_nonzero_argmin(matrix: csr_matrix) -> np.ndarray:
-    """
-    Returns the column index of the minimum non-zero value in each row,
-    ignoring structural and explicit zeros.
-
-    Returns -1 for empty rows.
-    """
-    n_rows = matrix.shape[0]
-    result = np.full(n_rows, -1, dtype=np.intp)
-
-    for i in range(n_rows):
-        start, end = matrix.indptr[i], matrix.indptr[i + 1]
-        if start == end:
-            continue
-        row_data = matrix.data[start:end]
-        nonzero_mask = row_data != 0
-        if not nonzero_mask.any():
-            continue
-        local_idx = row_data[nonzero_mask].argmin()
-        result[i] = matrix.indices[start:end][nonzero_mask][local_idx]
-
-    return result
 
 
 @njit(cache=True)

@@ -17,60 +17,6 @@ def _sort_rows(indices, data, indptr):
         data[s:e] = data[s:e][order]
 
 
-def compute_core_distances(knn_graph=None) -> np.ndarray:
-    """
-    Compute core distances for each point.
-
-    Parameters
-    ----------
-    knn_graph : csr_matrix
-        Sparse k-nearest-neighbors distance matrix.
-
-    Returns
-    -------
-    ndarray
-        Core distance for each point.
-    """
-    core_distances = knn_graph.max(axis=1).toarray().flatten()
-    return core_distances
-
-
-def mutual_reachability_incidence(
-    incidence_graph: csr_matrix,
-    test_core_dists: np.ndarray,
-    train_core_dists: np.ndarray,
-) -> csr_matrix:
-    """
-    Computes mutual reachability distances for a (M x N) incidence graph.
-
-    Parameters
-    ----------
-    incidence_graph : csr_matrix
-        KNN incidence graph for test data, shape (M, N)
-    test_core_dists: np.ndarray
-        Core distances for test data.
-    train_core_dists: np.ndarray
-        Core distances for training data.
-
-    Returns
-    -------
-    mrd_graph : csr_matrix
-        Mutual reachability weighted incidence graph, shape (M, N)
-    """
-    mrd = incidence_graph.copy().astype(np.float64)
-    rows, cols = mrd.nonzero()
-
-    mrd.data = np.maximum(
-        mrd.data,
-        np.maximum(
-            test_core_dists[rows],
-            train_core_dists[cols],
-        ),
-    )
-
-    return mrd
-
-
 def build_knn_graph(
     X: np.ndarray,
     n_neighbors: int,
@@ -170,23 +116,6 @@ def build_knn_graph(
             )
 
     return graph
-
-
-@njit(parallel=True, fastmath=True)
-def knn_distances(X, knn_indices):
-    n, k = knn_indices.shape
-    _, d = X.shape
-    knn_dists = np.empty((n, k), dtype=np.float64)
-    for i in prange(n):
-        xi = X[i]
-        for j in range(k):
-            idx = knn_indices[i, j]
-            s = 0.0
-            for t in range(d):
-                diff = X[idx, t] - xi[t]
-                s += diff * diff
-            knn_dists[i, j] = np.sqrt(s)
-    return knn_dists
 
 
 def knn_to_csr(

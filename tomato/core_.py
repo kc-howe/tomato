@@ -1,9 +1,7 @@
 from typing import Optional
 
 import numpy as np
-from numba import njit
 from scipy.sparse import csr_matrix, find
-from scipy.sparse.csgraph import connected_components
 from scipy.sparse.csgraph import shortest_path
 
 from tomato.cluster_selection import (
@@ -115,22 +113,6 @@ class ToMAToCore:
                 f"requires {name} to be set."
             )
 
-    def _degrees(self, A: csr_matrix) -> np.ndarray:
-        """
-        Return node degrees from a sparse adjacency matrix.
-
-        Parameters
-        ----------
-        A : csr_matrix
-            Sparse adjacency matrix.
-
-        Returns
-        -------
-        ndarray
-            Degree vector.
-        """
-        return np.array(A.sum(axis=1)).flatten()
-
     def get_threshold_by_significance(self, sig: float) -> float:
         """
         Estimate a persistence threshold from an exponential fit.
@@ -205,7 +187,7 @@ class ToMAToCore:
         )
         parent = np.arange(max_critical + 1, dtype=np.int64)
 
-        for dead, survivor, h, size in self.graph_persistence_.merge_tree_:
+        for dead, survivor, _, _ in self.graph_persistence_.merge_tree_:
             if self.graph_persistence_.persistence[dead] < persistence_threshold:
                 parent[dead] = survivor
 
@@ -244,22 +226,6 @@ class ToMAToCore:
             A = A.maximum(A.T).tocsr()
             self._sym_adj_cache = (gp, A)
         return self._sym_adj_cache[1]
-
-    def _components_per_label(self, adjacency, labels):
-        indptr, indices = adjacency.indptr, adjacency.indices
-        lab_row = np.repeat(labels, np.diff(indptr))
-        same = (lab_row == labels[indices]) & (lab_row >= 0)
-        del lab_row
-
-        sub = csr_matrix((same.astype(np.int8), indices, indptr), shape=adjacency.shape)
-        sub.eliminate_zeros()
-
-        _, comp = connected_components(sub, directed=True, connection="strong")
-
-        comp_label = np.full(comp.max() + 1, -1, dtype=np.int64)
-        comp_label[comp] = labels
-        comp_label = comp_label[comp_label >= 0]
-        return np.bincount(comp_label, minlength=labels.max() + 1)
 
     def _merge_disconnected_labels(self, labels: np.ndarray) -> np.ndarray:
         A = self.graph_persistence_.adjacency.tocsr()
