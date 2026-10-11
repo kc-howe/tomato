@@ -83,9 +83,9 @@ def run_test_large():
     )
 
     print("ToMATo")
-    tomatoscan = ToMATo()
-    huge_tomatoscan_data = benchmark_algorithm(
-        huge_dataset_sizes, tomatoscan.fit, (), {}, max_time=240, sample_size=4
+    tomato = ToMATo()
+    huge_tomato_data = benchmark_algorithm(
+        huge_dataset_sizes, tomato.fit, (), {}, max_time=240, sample_size=4
     )
 
     results_dict = {
@@ -94,7 +94,7 @@ def run_test_large():
         "K-Means": huge_k_means_data,
         "Scipy K-Means": huge_scipy_k_means_data,
         "HDBSCAN": huge_hdbscan_data,
-        "ToMATo": huge_tomatoscan_data,
+        "ToMATo": huge_tomato_data,
     }
 
     return results_dict
@@ -127,9 +127,9 @@ def run_test_small():
     )
 
     print("ToMATo")
-    tomatoscan = ToMATo()
-    huge_tomatoscan_data = benchmark_algorithm(
-        huge_dataset_sizes, tomatoscan.fit, (), {}, max_time=240, sample_size=4
+    tomato = ToMATo()
+    huge_tomato_data = benchmark_algorithm(
+        huge_dataset_sizes, tomato.fit, (), {}, max_time=240, sample_size=4
     )
 
     print("DBSCAN")
@@ -144,7 +144,7 @@ def run_test_small():
         "K-Means": huge_k_means_data,
         "Scipy K-Means": huge_scipy_k_means_data,
         "HDBSCAN": huge_hdbscan_data,
-        "ToMATo": huge_tomatoscan_data,
+        "ToMATo": huge_tomato_data,
         "DBSCAN": huge_dbscan_data,
     }
 

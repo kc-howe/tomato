@@ -13,24 +13,13 @@ from tomato._numpy_utils import ordered_unique
 class ToMATo(ToMAToCore):
     """
     ToMATo clustering with Distance-To-Measure (DTM) as the vertex function.
-
-    DTM(x) is the root-mean-square distance from x to its k nearest
-    neighbors. It is a stable (Wasserstein-Lipschitz) density surrogate:
-    small DTM => dense region, large DTM => sparse region / outlier.
-
+    
     Parameters
     ----------
     n_neighbors : int
-        Number of neighbors for the kNN graph and DTM (this is "k" in
-        the DTM definition).
+        Number of neighbors for the kNN graph.
     metric : str
         Distance metric for kNN graph construction.
-    dtm_weighted : bool
-        If True, weight each neighbor's squared distance by the
-        corresponding graph edge weight instead of using unweighted
-        RMS distance. Only meaningful when a weighted precomputed_graph
-        is supplied (e.g. attribute-distance weighted dual graph for
-        regionalization). Ignored otherwise.
     persistence_threshold : float or None
         Persistence threshold used directly.
     noise_aware : bool
@@ -62,7 +51,6 @@ class ToMATo(ToMAToCore):
         self,
         n_neighbors: int = 25,
         metric: str = "euclidean",
-        dtm_weighted: bool = False,
         cluster_selection_method: Optional[str] = None,
         persistence_threshold: Optional[float] = None,
         noise_aware: bool = False,
@@ -89,7 +77,6 @@ class ToMATo(ToMAToCore):
 
         self.n_neighbors = n_neighbors
         self.metric = check_metric(metric)
-        self.dtm_weighted = dtm_weighted
         self.use_approximate_knn = use_approximate_knn
         self.enforce_connected = enforce_connected
         self.drop_duplicates = drop_duplicates

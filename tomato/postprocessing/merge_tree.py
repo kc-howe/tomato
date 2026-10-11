@@ -138,19 +138,6 @@ class MergeTree:
     root : MergeTreeNode or None
         The root of the tree (the final surviving merged component).
         None only if the tree has not been built.
-
-    Notes
-    -----
-    Leaf construction relies only on critical_points, basin_assignment,
-    and f, which are well-defined by GraphPersistence.fit().
-
-    Internal-node construction relies on graph_persistence.merge_tree_,
-    whose exact shape depends on _graph_utils.build_merge_tree. This
-    class normalizes that structure through _parse_merge_events; if
-    your actual merge_tree_ format differs from the assumed
-    (basin_a, basin_b, merge_value) record shape, adjust that one
-    method — the rest of the class only depends on getting a clean,
-    time-ordered list of triples out of it.
     """
 
     def __init__(self, graph_persistence):
@@ -482,7 +469,7 @@ class MergeTree:
 
         coordinates = {}
 
-        # First past: Postorder traversal
+        # Postorder traversal
         node_y = {}
         for leaf in self.get_leaves():
             node_y[leaf.node_id] = leaf.birth if use_function_value else 0.0
@@ -502,7 +489,7 @@ class MergeTree:
             # Order children tallest first
             node.children.sort(key=lambda c: node_y[c.node_id], reverse=True)
 
-        # Second pass: Assign leaf x-values using new child order
+        # Assign leaf x-values using new child order
         leaf_order = []
         stack = [self.root]
         while stack:
@@ -515,7 +502,7 @@ class MergeTree:
         for x, leaf in enumerate(leaf_order):
             coordinates[leaf.node_id] = (float(x), float(node_y[leaf.node_id]))
 
-        # Third pass: Compute x-values as mean of children
+        # Compute x-values as mean of children
         for node in self.postorder():
             if node.is_leaf:
                 continue

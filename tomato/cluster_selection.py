@@ -1,14 +1,3 @@
-"""
-Cluster selection methods for ToMATo.
-
-Each method turns a persistence diagram into a single persistence threshold:
-classes with persistence below the threshold are merged into their parents,
-classes above it become clusters.
-
-All functions here are stateless. ToMAToCore keeps thin get_threshold_by_*
-wrappers that call into this module and record diagnostics on the estimator.
-"""
-
 from __future__ import annotations
 
 import warnings
