@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytomato"
-version = "0.5.0"
+version = "0.5.1"
 description = "Topological Mode Analysis Tool for fast, persistent, density-based clustering."
 readme = "README.md"
 requires-python = ">=3.8"
