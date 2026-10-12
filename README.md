@@ -79,8 +79,8 @@ clf = ToMATo().fit(X)
 # Optional: Largest persistence gap selection
 clf = ToMATo(cluster_selection_method="max_jump").fit(X)
 
-# Optional: Explicit persistence threshold
-threshold_clf = ToMATo(persistence_threshold=0.2).fit(X)
+# Optional: Explicit persistence threshold, given in units of distance between data points
+clf = ToMATo(persistence_threshold=0.2).fit(X)
 ```
 
 ### Number of clusters specification
