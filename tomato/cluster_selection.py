@@ -299,17 +299,6 @@ def threshold_by_max_jump(persistences, diagram) -> ThresholdResult:
     return ThresholdResult(float(threshold), "max_jump")
 
 
-def threshold_by_significance(persistences, sig: float) -> float:
-    """
-    Persistence threshold from an exponential fit at significance level sig.
-    """
-    if persistences is None:
-        raise ValueError("Must call fit() before get_threshold_by_significance()")
-
-    scale = np.asarray(persistences).mean()
-    return float(stats.expon.ppf(1 - sig, scale=scale))
-
-
 def threshold_by_n_clusters_after_merging(
     persistences, n_clusters: int, n_modes: int, count_clusters
 ) -> float:
@@ -416,7 +405,6 @@ def threshold_by_n_clusters(
 CLUSTER_SELECTION_METHODS = (
     "profile_likelihood",
     "max_jump",
-    "significance",
     "persistence_threshold",
     "n_clusters",
 )
@@ -454,8 +442,7 @@ def resolve_cluster_selection_method(
 
     candidates = (
         ("n_clusters", "n_clusters", n_clusters),
-        ("persistence_threshold", "persistence_threshold", persistence_threshold),
-        ("sig", "significance", sig),
+        ("persistence_threshold", "persistence_threshold", persistence_threshold)
     )
     given = [(name, chosen) for name, chosen, value in candidates if value is not None]
     if not given:

@@ -10,7 +10,6 @@ from tomato.cluster_selection import (
     threshold_by_max_jump,
     threshold_by_n_clusters,
     threshold_by_profile_likelihood,
-    threshold_by_significance,
     validate_cluster_selection_method,
 )
 from tomato.graph_persistence import GraphPersistence
@@ -31,21 +30,18 @@ class ToMAToCore:
     Parameters
     ----------
     cluster_selection_method : str or None
-        Method used to choose the persistence threshold. One of:
+        If supplied, explicitly sets the method used to choose the persistence
+        threshold. One of:
             * "profile_likelihood": profile-likelihood split of the log-ratio
             persistences, accepted only if significant, otherwise the largest raw jump.
             * "max_jump": split at the largest gap by gap statistic.
-            * "significance": exponential outlier threshold at significance level sig.
             * "persistence_threshold": use persistence_threshold directly.
             * "n_clusters": use the threshold that yields n_clusters clusters.
-        An explicit method is used as given and the other parameters are not
-        checked. If None (default), the method is inferred at fit time: n_clusters,
-        persistence_threshold or sig select the matching method (in that order of
+        An explicitly set method is used as given and the other parameters are not
+        checked. If None (default), the method is inferred at fit time: n_clusters
+        or persistence_threshold select the matching method (in that order of
         precedence, with a warning if more than one is set), and
         "profile_likelihood" is used if none is set.
-    sig : float or None
-        Significance level for exponential outlier detection (e.g., 0.01 for 1%).
-        Required when cluster_selection_method is "significance".
     persistence_threshold : float or None
         Persistence threshold used directly. Required when
         cluster_selection_method is "persistence_threshold".
@@ -99,7 +95,6 @@ class ToMAToCore:
         Check that the parameter required by cluster_selection_method is set.
         """
         required = {
-            "significance": ("sig", self.sig),
             "persistence_threshold": (
                 "persistence_threshold",
                 self.persistence_threshold,
@@ -112,12 +107,6 @@ class ToMAToCore:
                 f"cluster_selection_method='{self.cluster_selection_method}' "
                 f"requires {name} to be set."
             )
-
-    def get_threshold_by_significance(self, sig: float) -> float:
-        """
-        Estimate a persistence threshold from an exponential fit.
-        """
-        return threshold_by_significance(self.graph_persistence_.persistences_, sig)
 
     def get_threshold_by_n_clusters(self, n_clusters: int) -> float:
         """
@@ -165,7 +154,6 @@ class ToMAToCore:
         methods = {
             "profile_likelihood": self.get_threshold_by_profile_likelihood,
             "max_jump": self.get_threshold_by_max_jump,
-            "significance": lambda: self.get_threshold_by_significance(self.sig),
             "persistence_threshold": lambda: self.persistence_threshold,
             "n_clusters": lambda: self.get_threshold_by_n_clusters(self.n_clusters),
         }
