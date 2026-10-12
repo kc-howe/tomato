@@ -23,7 +23,9 @@ class ToMATo(ToMAToCore):
     persistence_threshold : float or None
         Persistence threshold used directly.
     noise_aware : bool
-        Detect noise points and assign a label of -1.
+        Detect noise points and assign a label of -1 when their assignment
+        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
+        apply a different threshold after fitting.
     use_approximate_knn : bool
         If True, use NNDescent for approximate kNN.
     n_clusters : int or None

@@ -121,7 +121,9 @@ class GeoToMATo(ToMAToCore):
     persistence_threshold : float or None
         Persistence threshold used directly.
     noise_aware : bool
-        Detect noise points and assign a label of -1.
+        Detect noise points and assign a label of -1 when their assignment
+        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
+        apply a different threshold after fitting.
     n_clusters : int or None
         Target number of clusters to maintain.
     min_clusters : int or None

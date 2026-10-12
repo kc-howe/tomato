@@ -95,16 +95,16 @@ clf = ToMATo(min_clusters=3).fit(X)
 
 ### Noise-aware labeling
 
-ToMATo computes a pointwise assignment strength for a given clustering by comparing each point's local function value to the cluster average. An assignment strength threshold (50% by default) can be specified to classify points as noise when their strength falls below it; such points receive the label `-1`.
+ToMATo computes a pointwise assignment probability for each point's assigned cluster. With noise awareness enabled, the default threshold is `0.9`: points with assignment probabilities below the threshold are classified as noise and receive the label `-1`. The threshold can be changed after fitting with `noise_aware_labels(threshold=...)`.
 
 ```python
-# Run with noise awareness (i.e. return >50% confidence labels)
+# Run with noise awareness (points with probability <90% become noise)
 clf = ToMATo(noise_aware=True).fit(X)
 labels = clf.labels_  # Noise labeled -1
 
 # Optional: Specify a custom threshold after fit
 clf = ToMATo(...).fit(X)
-labels = clf.noise_aware_labels(threshold=0.9)
+labels = clf.noise_aware_labels(threshold=0.75)
 ```
 
 ### Soft clustering

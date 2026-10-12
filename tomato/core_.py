@@ -46,7 +46,9 @@ class ToMAToCore:
         Persistence threshold used directly. Required when
         cluster_selection_method is "persistence_threshold".
     noise_aware: bool
-        Detect noise points and assign a label of -1.
+        Detect noise points and assign a label of -1 when their assignment
+        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
+        apply a different threshold after fitting.
     n_clusters : int or None
         Number of clusters to maintain. Required when cluster_selection_method
         is "n_clusters".
@@ -330,7 +332,7 @@ class ToMAToCore:
         self,
         labels: np.ndarray = None,
         probabilities: np.ndarray = None,
-        threshold: float = 0.5,
+        threshold: float = 0.9,
     ) -> np.ndarray:
         """
         Return noise-aware labeling from a prior set of labels and probabilities.
@@ -365,20 +367,30 @@ class ToMAToCore:
         return new_labels
 
     def assignment_probabilities(self, labels=None):
+        """
+        Calculate assignment probabilities for each sample to its assigned cluster.
+        """
         if labels is None:
             labels = self.labels_
-        f = self.graph_persistence_.f
+
+        sign = 1.0 if self.ascending else -1.0
+        g = sign * np.asarray(self.graph_persistence_.f, dtype=np.float64)
+        floor = g.min()
+
         valid = labels >= 0
         lab = labels[valid].astype(np.int64, copy=False)
-        sums = np.bincount(lab, weights=f[valid])
-        counts = np.bincount(lab)
-        mode = sums / np.maximum(counts, 1)
-        m = mode[lab]
+        n_labels = int(lab.max()) + 1 if lab.size else 0
+
+        counts = np.bincount(lab, minlength=n_labels)
+        ref = np.bincount(lab, weights=g[valid], minlength=n_labels) / np.maximum(
+            counts, 1
+        )
+
+        span = ref[lab] - floor
+        safe = np.where(span > 0, span, 1.0)
         p = np.zeros(labels.shape, dtype=np.float32)
-        if self.ascending:
-            p[valid] = np.minimum(f[valid], m) / m
-        else:
-            p[valid] = m / np.maximum(f[valid], m)
+        p[valid] = np.where(span > 0, np.clip((g[valid] - floor) / safe, 0, 1), 1.0)
+
         return p
 
     def full_assignment_probabilities(
