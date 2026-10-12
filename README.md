@@ -19,8 +19,6 @@
 pip install pytomato
 ```
 
-**Note:** the package is installed as `pytomato` but imported as `tomato`.
-
 ## Quick Start
 
 The `ToMATo` class conforms to the sklearn API.
