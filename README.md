@@ -216,15 +216,6 @@ ToMATo was introduced in 2011 by Chazal, et al.:
 
 > Chazal, F., Guibas, L. J., Oudot, S., & Skraba, P. (2011). Persistence-based clustering in Riemannian manifolds. Proceedings of the 27th Annual ACM Symposium on Computational Geometry (SCG '11), 97–106. https://geometry.stanford.edu/paper/cgos-pbcrm-11/cgos-pbcrm-11.pdf
 
-```bibtex
-@inproceedings{chazal2011persistence,
-  title     = {Persistence-based clustering in Riemannian manifolds},
-  author    = {Chazal, Fr{\'e}d{\'e}ric and Guibas, Leonidas J. and Oudot, Steve Y. and Skraba, Primoz},
-  booktitle = {Proceedings of the 27th Annual ACM Symposium on Computational Geometry (SCG '11)},
-  pages     = {97--106},
-  year      = {2011}
-}
-```
 
 ## License
 
