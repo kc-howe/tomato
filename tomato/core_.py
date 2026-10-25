@@ -298,6 +298,7 @@ class ToMAToCore:
 
         probabilities = self.assignment_probabilities(labels)
 
+        self._full_labels = labels
         self.labels_ = labels
         self.probabilities_ = probabilities
         self.modes_ = critical_points
@@ -330,9 +331,9 @@ class ToMAToCore:
 
     def noise_aware_labels(
         self,
+        threshold: float = 0.9,
         labels: np.ndarray = None,
         probabilities: np.ndarray = None,
-        threshold: float = 0.9,
     ) -> np.ndarray:
         """
         Return noise-aware labeling from a prior set of labels and probabilities.
@@ -355,7 +356,7 @@ class ToMAToCore:
         if labels is None:
             if probabilities is not None:
                 raise ValueError("Must supply both labels and label probabilities.")
-            labels = self.labels_
+            labels = self._full_labels
             probabilities = self.probabilities_
         elif probabilities is None:
             raise ValueError("Must supply both labels and label probabilities.")
@@ -367,30 +368,43 @@ class ToMAToCore:
         return new_labels
 
     def assignment_probabilities(self, labels=None):
-        """
-        Calculate assignment probabilities for each sample to its assigned cluster.
-        """
         if labels is None:
-            labels = self.labels_
+            labels = self._full_labels
 
+        labels = np.asarray(labels)
         sign = 1.0 if self.ascending else -1.0
         g = sign * np.asarray(self.graph_persistence_.f, dtype=np.float64)
-        floor = g.min()
 
         valid = labels >= 0
+        p = np.zeros(labels.shape, dtype=np.float32)
+
+        if not np.any(valid):
+            return p
+
         lab = labels[valid].astype(np.int64, copy=False)
-        n_labels = int(lab.max()) + 1 if lab.size else 0
+        x = g[valid]
+        n_labels = int(lab.max()) + 1
 
         counts = np.bincount(lab, minlength=n_labels)
-        ref = np.bincount(lab, weights=g[valid], minlength=n_labels) / np.maximum(
+        means = np.bincount(lab, weights=x, minlength=n_labels) / np.maximum(counts, 1)
+
+        deviations = np.abs(x - means[lab])
+        scales = np.bincount(lab, weights=deviations, minlength=n_labels) / np.maximum(
             counts, 1
         )
 
-        span = ref[lab] - floor
-        safe = np.where(span > 0, span, 1.0)
-        p = np.zeros(labels.shape, dtype=np.float32)
-        p[valid] = np.where(span > 0, np.clip((g[valid] - floor) / safe, 0, 1), 1.0)
+        deficit = np.maximum(means[lab] - x, 0.0)
 
+        scale = scales[lab]
+        probs = np.ones_like(deficit)
+        np.divide(
+            scale,
+            scale + deficit,
+            out=probs,
+            where=(scale + deficit) > 0,
+        )
+
+        p[valid] = probs.astype(np.float32)
         return p
 
     def full_assignment_probabilities(
