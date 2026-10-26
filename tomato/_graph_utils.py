@@ -77,7 +77,7 @@ def _best_edge_per_row(A, mask, key, ascending):
     indptr, indices, data = A.indptr, A.indices, A.data
     n = A.shape[0]
 
-    e = np.flatnonzero(mask)  # edge ids, row-sorted
+    e = np.flatnonzero(mask)
     if e.size == 0:
         return csr_matrix(A.shape, dtype=data.dtype)
 
@@ -91,7 +91,7 @@ def _best_edge_per_row(A, mask, key, ascending):
 
     pos = np.flatnonzero(is_best)
     seg_of = np.repeat(np.arange(starts.size), seg_len)[pos]
-    first = pos[np.r_[True, seg_of[1:] != seg_of[:-1]]]  # first max per row
+    first = pos[np.r_[True, seg_of[1:] != seg_of[:-1]]]
 
     best_e, best_rows = e[first], rows[first]
     out_indptr = np.zeros(n + 1, dtype=indptr.dtype)
@@ -128,12 +128,12 @@ def compute_saddles(adjacency, f, basin_assignment, ascending=True):
     counts = np.diff(indptr)
 
     ba = np.asarray(basin_assignment)
-    B = int(ba.max()) + 1  # assumes basin ids >= 0
+    B = int(ba.max()) + 1
     ba32 = ba.astype(np.int32 if B < 2**31 else np.int64, copy=False)
 
     ru = np.repeat(ba32, counts)
     rv = ba32[cols]
-    e = np.flatnonzero(ru != rv)  # cross-basin edges only
+    e = np.flatnonzero(ru != rv)
     if e.size == 0:
         return {}
 
@@ -144,7 +144,7 @@ def compute_saddles(adjacency, f, basin_assignment, ascending=True):
 
     lo = np.minimum(ru, rv).astype(np.int64)
     hi = np.maximum(ru, rv).astype(np.int64)
-    key = lo * B + hi  # B*B < 2^63 for B up to ~3e9
+    key = lo * B + hi
 
     order = np.argsort(key, kind="stable")
     ks, hs = key[order], h[order]
@@ -177,7 +177,7 @@ def _saddles_to_csr(saddles) -> csr_matrix:
     rows, cols, data = zip(*[(u, v, w) for (u, v), w in saddles.items()])
     rows = np.array(rows, dtype=np.int32)
     cols = np.array(cols, dtype=np.int32)
-    data = np.array(data, dtype=np.float32)
+    data = np.array(data, dtype=np.float64)
 
     n_nodes = cols.max() + 1
 
