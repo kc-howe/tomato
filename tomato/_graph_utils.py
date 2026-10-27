@@ -2,14 +2,24 @@ from typing import Optional
 
 import numpy as np
 from numba import njit
-from scipy.sparse import csr_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree, connected_components
 from scipy.spatial.distance import cdist
 
 from tomato._union_find import find
 
 
-@njit(parallel=True)
+def first_entry_per_row(A, fill=-1):
+    """
+    Column of the first stored entry in each CSR row, plus a mask of non-empty rows.
+    """
+    has = np.diff(A.indptr) > 0
+    out = np.full(A.shape[0], fill, dtype=np.int64)
+    out[has] = A.indices[A.indptr[:-1][has]]
+    return out, has
+
+
+@njit(cache=True)
 def get_connected_components(indptr, indices, mask):
     """
     Return comp_id array (len n) where nodes not in mask have -1,
@@ -365,26 +375,22 @@ def compute_stabilities(
 
     Returns
     -------
-    stabilities : ndarray
-        Persistence weighted by cluster size
+    (persistence, diagram, stabilities)
     """
 
     persistence, diagram, lifetimes = compute_persistence(
         f, death, critical_points, ascending
     )
 
-    cluster_size_dict = {
-        dead: merged_size for dead, _, _, merged_size in merge_tree
-    }
-
     unique_basins, counts = np.unique(basin_assignment, return_counts=True)
-    initial_sizes = dict(zip(unique_basins, counts))
+    sizes = dict(zip(unique_basins.tolist(), counts.tolist()))
+    size_at_death = {}
+    for dead, survivor, _, merged_size in merge_tree:
+        size_at_death[dead] = sizes[dead]
+        sizes[survivor] = merged_size
 
     cluster_sizes = np.array(
-        [
-            cluster_size_dict.get(cp_id, initial_sizes.get(cp_id, 0))
-            for cp_id in critical_points
-        ],
+        [size_at_death.get(cp, sizes.get(cp, 0)) for cp in critical_points],
         dtype=int,
     )
 
@@ -583,11 +589,18 @@ def merge_components(
             bridge_cols += [c2, c1]
             bridge_weights += [w, w]
 
-        bridge = csr_matrix(
-            (bridge_weights, (bridge_rows, bridge_cols)),
+        bridge_weights = np.maximum(bridge_weights, np.finfo(np.float64).tiny)
+        graph_coo = graph.tocoo()
+        graph = coo_matrix(
+            (
+                np.concatenate((graph_coo.data, bridge_weights)),
+                (
+                    np.concatenate((graph_coo.row, bridge_rows)),
+                    np.concatenate((graph_coo.col, bridge_cols)),
+                ),
+            ),
             shape=graph.shape,
-        )
-        graph = graph + bridge
+        ).tocsr()
 
     return graph
 
@@ -635,9 +648,17 @@ def merge_disconnected_components(
     indptr,
     indices,
     unique_labels,
+    modes=None,
 ):
+    """
+    Merge disconnected label components, retaining the component with its mode.
+
+    Parameters
+    ----------
+    modes : array-like, optional
+        Mode vertex for each label, indexed by label.
+    """
     new_labels = labels.copy()
-    n_nodes = labels.shape[0]
 
     for lab in unique_labels:
         mask = new_labels == lab
@@ -656,6 +677,10 @@ def merge_disconnected_components(
         )
 
         keep_comp = sizes.argmax()
+        if modes is not None:
+            mode_comp = comp_id[modes[lab]]
+            if mode_comp >= 0:
+                keep_comp = mode_comp
 
         cluster_lookup = new_labels.astype(np.int64)
         cluster_lookup[new_labels == lab] = -1
