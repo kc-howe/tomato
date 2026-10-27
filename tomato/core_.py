@@ -225,7 +225,7 @@ class ToMAToCore:
     def _merge_disconnected_labels(
         self, labels: np.ndarray, modes=None
     ) -> np.ndarray:
-        A = self._get_sym_adjacency()
+        A = self.graph_persistence_.adjacency.tocsr()
         labels = np.asarray(labels, dtype=np.int64)
         n_comp = components_per_label_uf(
             A.indptr, A.indices, labels, int(labels.max()) + 1
@@ -245,6 +245,8 @@ class ToMAToCore:
 
         if bad_labels.size == 0:
             return labels
+
+        A = self._get_sym_adjacency()
 
         new_labels = merge_disconnected_components(
             labels, A.indptr, A.indices, bad_labels, modes=modes
