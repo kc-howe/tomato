@@ -6,7 +6,7 @@ from scipy.sparse import csr_matrix
 from tomato.core_ import ToMAToCore
 from tomato._knn_utils import build_knn_graph
 from tomato.metric import check_metric
-from tomato._graph_utils import merge_components
+from tomato._graph_utils import first_entry_per_row, merge_components
 from tomato._numpy_utils import ordered_unique
 
 
@@ -138,6 +138,8 @@ class ToMATo(ToMAToCore):
         Fit the ToMATo clustering model.
         """
 
+        self.duplicate_index_ = None
+        self._duplicate_inverse = None
         self._raw_data = X
 
         if self.drop_duplicates:
@@ -174,21 +176,8 @@ class ToMATo(ToMAToCore):
                 random_state=self.random_state,
             )
 
-            if self.enforce_connected:
-                if self.verbose:
-                    print("[ToMATo] Enforcing connectivity...")
-
-                graph = merge_components(
-                    graph,
-                    X,
-                    metric=self.metric,
-                    random_state=self.random_state,
-                )
-
-                if self.verbose:
-                    print(f"[ToMATo] Graph connectivity enforced: " f"{graph.nnz} edges")
-
         self.knn_graph_ = graph
+        self._compute_dtm(graph)
 
         if self.verbose:
             print(
@@ -196,14 +185,24 @@ class ToMATo(ToMAToCore):
                 f"{graph.nnz} edges, {graph.shape[0]} nodes"
             )
 
-        self._compute_dtm(graph)
+        if self.enforce_connected and self.precomputed_graph is None:
+            if self.verbose:
+                print("[ToMATo] Enforcing connectivity...")
 
-        A = graph.copy()
+            graph = merge_components(
+                graph,
+                X,
+                metric=self.metric,
+                random_state=self.random_state,
+            )
 
-        self.graph_ = A
+            if self.verbose:
+                print(f"[ToMATo] Graph connectivity enforced: " f"{graph.nnz} edges")
+
+        self.graph_ = graph
 
         super().fit(
-            A,
+            graph,
             self.vertex_function_,
         )
 
@@ -214,6 +213,17 @@ class ToMATo(ToMAToCore):
             self.vertex_function_ = self.vertex_function_[self._duplicate_inverse]
 
         return self
+
+    def noise_aware_labels(
+        self,
+        threshold: float = 0.9,
+        labels: np.ndarray = None,
+        probabilities: np.ndarray = None,
+    ) -> np.ndarray:
+        out = super().noise_aware_labels(threshold, labels, probabilities)
+        if labels is None and self._duplicate_inverse is not None:
+            out = out[self._duplicate_inverse]
+        return out
 
     def fit_predict(self, X: np.ndarray) -> np.ndarray:
         self.fit(X)
@@ -227,7 +237,12 @@ class ToMATo(ToMAToCore):
         if y is None:
             y = self.labels_
 
+        if len(y) != len(self._raw_data):
+            raise ValueError("y must have length len(self._raw_data).")
+
         mask = y > -1
+        if not mask.any():
+            raise ValueError("Cannot predict: all training points are labeled as noise.")
 
         incidence_graph = build_knn_graph(
             self._raw_data[mask],
@@ -239,6 +254,7 @@ class ToMATo(ToMAToCore):
             random_state=self.random_state,
         )
 
-        label_indices = incidence_graph.indices[incidence_graph.indptr[:-1]]
-
-        return y[mask][label_indices]
+        idx, has = first_entry_per_row(incidence_graph)
+        out = np.full(idx.shape[0], -1, dtype=y.dtype)
+        out[has] = y[mask][idx[has]]
+        return out
