@@ -2,7 +2,10 @@ import numpy as np
 
 
 def ordered_unique(arr):
-    arr_unique, index, inverse = np.unique(arr, axis=0, return_index=True, return_inverse=True)
+    arr_unique, index, inverse = np.unique(
+        arr, axis=0, return_index=True, return_inverse=True
+    )
+    inverse = np.asarray(inverse).reshape(-1)
     order = np.argsort(index)
     rank = np.empty_like(order)
     rank[order] = np.arange(len(order))
