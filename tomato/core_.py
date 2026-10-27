@@ -1,7 +1,7 @@
 from typing import Optional
 
 import numpy as np
-from scipy.sparse import csr_matrix, find
+from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path
 
 from tomato.cluster_selection import (
@@ -18,6 +18,7 @@ from tomato._graph_utils import (
     get_assignment_parents,
     components_per_label_uf,
     merge_disconnected_components,
+    first_entry_per_row,
 )
 
 
@@ -125,7 +126,9 @@ class ToMAToCore:
         gap p-value is <= alpha; otherwise the largest raw jump.
         Sets split_method_ and split_pvalue_.
         """
-        gp = self.graph_persistence_
+        gp = getattr(self, "graph_persistence_", None)
+        if gp is None:
+            raise ValueError("Must call fit() first")
         if gp.persistences_ is None:
             raise ValueError(
                 "Must call fit() before get_threshold_by_profile_likelihood()"
@@ -141,7 +144,9 @@ class ToMAToCore:
         Sets split_method_ and split_pvalue_ (always NaN: the null
         distribution is calibrated for the profile-likelihood split, not the max).
         """
-        gp = self.graph_persistence_
+        gp = getattr(self, "graph_persistence_", None)
+        if gp is None:
+            raise ValueError("Must call fit() first")
         if gp.persistences_ is None:
             raise ValueError("Must call fit() before get_threshold_by_max_jump()")
         res = threshold_by_max_jump(gp.persistences_, gp.diagram_)
@@ -196,7 +201,7 @@ class ToMAToCore:
             unique_basins, labels = np.unique(basin_assignment, return_inverse=True)
 
         if merge_disconnected:
-            labels = self._merge_disconnected_labels(labels)
+            labels = self._merge_disconnected_labels(labels, unique_basins)
 
         if return_critical_points:
             basin_map = {unique_basins[i]: i for i in range(len(unique_basins))}
@@ -217,8 +222,10 @@ class ToMAToCore:
             self._sym_adj_cache = (gp, A)
         return self._sym_adj_cache[1]
 
-    def _merge_disconnected_labels(self, labels: np.ndarray) -> np.ndarray:
-        A = self.graph_persistence_.adjacency.tocsr()
+    def _merge_disconnected_labels(
+        self, labels: np.ndarray, modes=None
+    ) -> np.ndarray:
+        A = self._get_sym_adjacency()
         labels = np.asarray(labels, dtype=np.int64)
         n_comp = components_per_label_uf(
             A.indptr, A.indices, labels, int(labels.max()) + 1
@@ -239,9 +246,8 @@ class ToMAToCore:
         if bad_labels.size == 0:
             return labels
 
-        adj = self._get_sym_adjacency()
         new_labels = merge_disconnected_components(
-            labels, adj.indptr, adj.indices, bad_labels
+            labels, A.indptr, A.indices, bad_labels, modes=modes
         )
 
         if self.verbose:
@@ -267,9 +273,8 @@ class ToMAToCore:
 
         if self.all_modes_.shape[0] == 1:
             self.threshold_ = np.inf
-            labels, critical_points = np.zeros(
-                self.f_.shape[0]
-            ), self.all_modes_.astype(int)
+            labels = np.zeros(self.f_.shape[0], dtype=np.int64)
+            critical_points = {0: int(self.all_modes_[0])}
         else:
             self.threshold_ = self._select_threshold()
             if self.verbose:
@@ -286,12 +291,18 @@ class ToMAToCore:
             and self.cluster_selection_method_ != "n_clusters"
         ):
             current_n = len(np.unique(labels[labels >= 0]))
-            if current_n < self.min_clusters:
+            n_modes = self.all_modes_.shape[0]
+            if current_n < min(self.min_clusters, n_modes):
                 if self.verbose:
                     print(
                         f"[ToMATo] Adjusting for min_clusters={self.min_clusters} (was {current_n})"
                     )
-                self.threshold_ = self.get_threshold_by_n_clusters(self.min_clusters)
+                if self.min_clusters >= n_modes:
+                    self.threshold_ = 0.0
+                else:
+                    self.threshold_ = self.get_threshold_by_n_clusters(
+                        self.min_clusters
+                    )
                 labels, critical_points = self.get_labels_by_threshold(
                     self.threshold_, return_critical_points=True
                 )
@@ -300,11 +311,12 @@ class ToMAToCore:
 
         self._full_labels = labels
         self.labels_ = labels
+        self._full_probabilities = probabilities
         self.probabilities_ = probabilities
         self.modes_ = critical_points
 
         if self.noise_aware:
-            self.labels_ = self.noise_aware_labels()
+            self.labels_ = ToMAToCore.noise_aware_labels(self)
 
         return
 
@@ -326,6 +338,11 @@ class ToMAToCore:
 
         mapping = np.cumsum(present) - 1
         labels[mask] = mapping[lab]
+        self.modes_ = {
+            int(mapping[k]): v
+            for k, v in self.modes_.items()
+            if k < present.size and present[k]
+        }
 
         return
 
@@ -357,7 +374,7 @@ class ToMAToCore:
             if probabilities is not None:
                 raise ValueError("Must supply both labels and label probabilities.")
             labels = self._full_labels
-            probabilities = self.probabilities_
+            probabilities = self._full_probabilities
         elif probabilities is None:
             raise ValueError("Must supply both labels and label probabilities.")
 
@@ -425,74 +442,77 @@ class ToMAToCore:
         probabilities : np.ndarray
             Full assignment probabilities for each sample to each cluster.
         """
+        if temperature < 0.0:
+            raise ValueError("Temperature must be non-negative.")
         if labels is None:
             labels = self.labels_
 
-        is_deduplicated = hasattr(self, "duplicate_index_")
-
-        if is_deduplicated:
-            labels = labels[self.duplicate_index_]
+        dup = getattr(self, "duplicate_index_", None)
+        is_dedup = dup is not None
+        n_original = labels.shape[0]
+        if is_dedup:
+            labels = labels[dup]
 
         n = labels.shape[0]
-        flat_probs = self.assignment_probabilities(labels)
-        unique_labels = [l for l in np.unique(labels) if l != -1]
+        unique_labels = np.unique(labels[labels != -1])
         n_labels = len(unique_labels)
 
-        if temperature < 0.0:
-            raise ValueError("Temperature must be non-negative.")
+        if n_labels == 0:
+            return np.zeros((n_original, 0), dtype=float)
+
         if temperature == 0.0:
-            unique_labels = np.unique(labels)
-            probabilities = (labels[None, :] == unique_labels[:, None]).astype(float)
-            return probabilities.T
+            probabilities = (
+                labels[:, None] == unique_labels[None, :]
+            ).astype(float)
+        else:
+            flat_probs = self.assignment_probabilities(labels)
+            cluster_cores = {}
+            for label in unique_labels:
+                mask = (labels == label) & np.isclose(flat_probs, 1.0)
+                core_points = np.where(mask)[0]
 
-        # Identify core points for each cluster
-        cluster_cores = {}
-        for label in unique_labels:
-            mask = (labels == label) & np.isclose(flat_probs, 1.0)
-            core_points = np.where(mask)[0]
+                if len(core_points) == 0:
+                    members = np.flatnonzero(labels == label)
+                    fm = self.f_[members] if self.ascending else -self.f_[members]
+                    core_points = [members[np.argmax(fm)]]
+                cluster_cores[label] = core_points
 
-            if len(core_points) == 0:
-                core_points = [
-                    np.argmax(self.graph_persistence_.f[labels == label])
-                    + np.where(labels == label)[0][0]
-                ]
-            cluster_cores[label] = core_points
+            dummy_edges = []
+            dummy_idx = n
+            for label in unique_labels:
+                core_points = cluster_cores[label]
+                for p in core_points:
+                    dummy_edges.append((dummy_idx, p, 0.0))
+                dummy_idx += 1
 
-        # Build augmented graph with dummy nodes
-        dummy_edges = []
-        dummy_idx = n
-        for label in unique_labels:
-            core_points = cluster_cores[label]
-            for p in core_points:
-                dummy_edges.append((dummy_idx, p, 0.0))
-            dummy_idx += 1
-
-        rows, cols, data = find(self.graph_)
-        if dummy_edges:
+            graph_coo = self.graph_.tocoo()
             drows, dcols, ddata = zip(*dummy_edges)
-            rows = np.concatenate([rows, drows])
-            cols = np.concatenate([cols, dcols])
-            data = np.concatenate([data, ddata])
+            rows = np.concatenate((graph_coo.row, np.asarray(drows)))
+            cols = np.concatenate((graph_coo.col, np.asarray(dcols)))
+            data = np.concatenate((graph_coo.data, np.asarray(ddata)))
+            aug_graph = csr_matrix(
+                (data, (rows, cols)), shape=(n + n_labels, n + n_labels)
+            )
 
-        aug_graph = csr_matrix((data, (rows, cols)), shape=(n + n_labels, n + n_labels))
+            dummy_indices = np.arange(n, n + n_labels)
+            distances_from_dummies = shortest_path(
+                csgraph=aug_graph,
+                directed=False,
+                indices=dummy_indices,
+                return_predecessors=False,
+            )
+            distances_to_cores = distances_from_dummies[:, :n].T
 
-        # Compute distances from dummy nodes
-        dummy_indices = np.arange(n, n + n_labels)
-        distances_from_dummies = shortest_path(
-            csgraph=aug_graph,
-            directed=False,
-            indices=dummy_indices,
-            return_predecessors=False,
-        )
+            d = distances_to_cores
+            dmin = d.min(axis=1, keepdims=True)
+            reachable = np.isfinite(dmin)
+            w = np.exp(
+                -(d - np.where(reachable, dmin, 0.0)) / temperature
+            )
+            w[~reachable[:, 0]] = 1.0
+            probabilities = w / w.sum(axis=1, keepdims=True)
 
-        # Extract distances to original nodes
-        distances_to_cores = distances_from_dummies[:, :n].T
-
-        # Softmax probabilities
-        probabilities = np.exp(-distances_to_cores / temperature)
-        probabilities /= probabilities.sum(axis=1, keepdims=True)
-
-        if is_deduplicated:
+        if is_dedup:
             probabilities = probabilities[self._duplicate_inverse, :]
 
         return probabilities
@@ -570,7 +590,7 @@ class ToMAToCore:
         return self.labels_
 
     def predict(self, incidence_graph: csr_matrix, f: np.ndarray) -> np.ndarray:
-
+        """Predict labels; -1 indicates the test point is its own local mode."""
         gradients = compute_incidence_gradients(
             incidence_graph,
             f_train=self.f_,
@@ -580,7 +600,7 @@ class ToMAToCore:
         )
         gradients.eliminate_zeros()
 
-        label_indices = gradients.indices[gradients.indptr[:-1]]
-        pred_labels = self.labels_[label_indices]
-
-        return pred_labels
+        idx, has = first_entry_per_row(gradients)
+        pred = np.full(idx.shape[0], -1, dtype=self.labels_.dtype)
+        pred[has] = self.labels_[idx[has]]
+        return pred
