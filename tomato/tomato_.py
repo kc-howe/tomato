@@ -13,7 +13,7 @@ from tomato._numpy_utils import ordered_unique
 class ToMATo(ToMAToCore):
     """
     ToMATo clustering with Distance-To-Measure (DTM) as the vertex function.
-    
+
     Parameters
     ----------
     n_neighbors : int
@@ -22,10 +22,12 @@ class ToMATo(ToMAToCore):
         Distance metric for kNN graph construction.
     persistence_threshold : float or None
         Persistence threshold used directly.
-    noise_aware : bool
-        Detect noise points and assign a label of -1 when their assignment
-        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
-        apply a different threshold after fitting.
+    filter_noise : bool
+        If True, points whose assignment probability is below noise_threshold
+        are labeled -1 (noise).
+    noise_threshold : float
+        Assignment probability below which points are labeled as noise.
+        Only meaningful when filter_noise is True. Default 0.9.
     use_approximate_knn : bool
         If True, use NNDescent for approximate kNN.
     n_clusters : int or None
@@ -55,7 +57,8 @@ class ToMATo(ToMAToCore):
         metric: str = "euclidean",
         cluster_selection_method: Optional[str] = None,
         persistence_threshold: Optional[float] = None,
-        noise_aware: bool = False,
+        filter_noise: bool = False,
+        noise_threshold: float = 0.9,
         use_approximate_knn: bool = False,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
@@ -69,7 +72,8 @@ class ToMATo(ToMAToCore):
             cluster_selection_method=cluster_selection_method,
             sig=None,
             persistence_threshold=persistence_threshold,
-            noise_aware=noise_aware,
+            filter_noise=filter_noise,
+            noise_threshold=noise_threshold,
             n_clusters=n_clusters,
             min_clusters=min_clusters,
             ascending=False,
@@ -181,8 +185,7 @@ class ToMATo(ToMAToCore):
 
         if self.verbose:
             print(
-                f"[ToMATo] Graph built: "
-                f"{graph.nnz} edges, {graph.shape[0]} nodes"
+                f"[ToMATo] Graph built: " f"{graph.nnz} edges, {graph.shape[0]} nodes"
             )
 
         if self.enforce_connected and self.precomputed_graph is None:
@@ -214,17 +217,6 @@ class ToMATo(ToMAToCore):
 
         return self
 
-    def noise_aware_labels(
-        self,
-        threshold: float = 0.9,
-        labels: np.ndarray = None,
-        probabilities: np.ndarray = None,
-    ) -> np.ndarray:
-        out = super().noise_aware_labels(threshold, labels, probabilities)
-        if labels is None and self._duplicate_inverse is not None:
-            out = out[self._duplicate_inverse]
-        return out
-
     def fit_predict(self, X: np.ndarray) -> np.ndarray:
         self.fit(X)
         return self.labels_
@@ -242,7 +234,9 @@ class ToMATo(ToMAToCore):
 
         mask = y > -1
         if not mask.any():
-            raise ValueError("Cannot predict: all training points are labeled as noise.")
+            raise ValueError(
+                "Cannot predict: all training points are labeled as noise."
+            )
 
         incidence_graph = build_knn_graph(
             self._raw_data[mask],

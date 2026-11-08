@@ -155,10 +155,12 @@ class GeoToMATo(ToMAToCore):
         (for example "max_jump"). Passed through to `ToMAToCore`; see its
         documentation for the supported options. Ignored if
         `persistence_threshold` is given.
-    noise_aware : bool
-        Detect noise points and assign a label of -1 when their assignment
-        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
-        apply a different threshold after fitting.
+    filter_noise : bool
+        If True, points whose assignment probability is below noise_threshold
+        are labeled -1 (noise).
+    noise_threshold : float
+        Assignment probability below which points are labeled as noise.
+        Only meaningful when filter_noise is True. Default 0.9.
     n_clusters : int or None
         Target number of clusters to maintain.
     min_clusters : int or None
@@ -180,7 +182,8 @@ class GeoToMATo(ToMAToCore):
         sample_weight: Optional[np.ndarray] = None,
         persistence_threshold: Optional[float] = None,
         cluster_selection_method: Optional[str] = None,
-        noise_aware: bool = False,
+        filter_noise: bool = False,
+        noise_threshold: float = 0.9,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
         drop_duplicates: bool = False,
@@ -190,7 +193,8 @@ class GeoToMATo(ToMAToCore):
             sig=None,
             persistence_threshold=persistence_threshold,
             cluster_selection_method=cluster_selection_method,
-            noise_aware=noise_aware,
+            filter_noise=filter_noise,
+            noise_threshold=noise_threshold,
             n_clusters=n_clusters,
             min_clusters=min_clusters,
             ascending=False,

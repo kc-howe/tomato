@@ -22,6 +22,9 @@ from tomato._graph_utils import (
 )
 
 
+DEFAULT_NOISE_THRESHOLD = 0.9
+
+
 class ToMAToCore:
     """
     Topological Mode Analysis Tool (ToMAToCore) for clustering based on graph persistence.
@@ -46,10 +49,12 @@ class ToMAToCore:
     persistence_threshold : float or None
         Persistence threshold used directly. Required when
         cluster_selection_method is "persistence_threshold".
-    noise_aware: bool
-        Detect noise points and assign a label of -1 when their assignment
-        probability is below 0.9. Use `noise_aware_labels(threshold=...)` to
-        apply a different threshold after fitting.
+    filter_noise : bool
+        If True, points whose assignment probability is below noise_threshold
+        are labeled -1 (noise).
+    noise_threshold : float
+        Assignment probability below which points are labeled as noise.
+        Only meaningful when filter_noise is True. Default 0.9.
     n_clusters : int or None
         Number of clusters to maintain. Required when cluster_selection_method
         is "n_clusters".
@@ -70,7 +75,8 @@ class ToMAToCore:
         sig: Optional[float] = None,
         persistence_threshold: Optional[float] = None,
         cluster_selection_method: Optional[str] = None,
-        noise_aware: bool = False,
+        filter_noise: bool = False,
+        noise_threshold: float = DEFAULT_NOISE_THRESHOLD,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
         ascending: bool = True,
@@ -83,33 +89,42 @@ class ToMAToCore:
         if cluster_selection_method is not None:
             validate_cluster_selection_method(cluster_selection_method)
         self.cluster_selection_method = cluster_selection_method
-        self.noise_aware = noise_aware
+        self._check_noise_parameters(filter_noise, noise_threshold)
+        self.filter_noise = filter_noise
+        self.noise_threshold = noise_threshold
         self.n_clusters = n_clusters
         self.min_clusters = min_clusters
         self.ascending = ascending
         self.use_stability = use_stability
         self.use_edge_gradients = use_edge_gradients
         self.verbose = verbose
-        self._validate_selection_parameters()
+        self._validate_selection_parameters(
+            self.cluster_selection_method, self.persistence_threshold, self.n_clusters
+        )
         return
 
-    def _validate_selection_parameters(self) -> None:
+    @staticmethod
+    def _validate_selection_parameters(
+        cluster_selection_method, persistence_threshold, n_clusters
+    ) -> None:
         """
         Check that the parameter required by cluster_selection_method is set.
         """
         required = {
-            "persistence_threshold": (
-                "persistence_threshold",
-                self.persistence_threshold,
-            ),
-            "n_clusters": ("n_clusters", self.n_clusters),
+            "persistence_threshold": ("persistence_threshold", persistence_threshold),
+            "n_clusters": ("n_clusters", n_clusters),
         }
-        name, value = required.get(self.cluster_selection_method, (None, True))
+        name, value = required.get(cluster_selection_method, (None, True))
         if value is None:
             raise ValueError(
-                f"cluster_selection_method='{self.cluster_selection_method}' "
+                f"cluster_selection_method='{cluster_selection_method}' "
                 f"requires {name} to be set."
             )
+
+    @staticmethod
+    def _check_noise_parameters(filter_noise, noise_threshold) -> None:
+        if not filter_noise and noise_threshold != DEFAULT_NOISE_THRESHOLD:
+            raise ValueError("noise_threshold has no effect unless filter_noise=True.")
 
     def get_threshold_by_n_clusters(self, n_clusters: int) -> float:
         """
@@ -154,19 +169,21 @@ class ToMAToCore:
         self.split_pvalue_ = res.pvalue
         return res.threshold
 
-    def _select_threshold(self) -> float:
+    def _select_threshold(
+        self, method: str, persistence_threshold, n_clusters
+    ) -> float:
         """
         Return the persistence threshold given by the resolved selection method.
         """
         methods = {
             "profile_likelihood": self.get_threshold_by_profile_likelihood,
             "max_jump": self.get_threshold_by_max_jump,
-            "persistence_threshold": lambda: self.persistence_threshold,
-            "n_clusters": lambda: self.get_threshold_by_n_clusters(self.n_clusters),
+            "persistence_threshold": lambda: persistence_threshold,
+            "n_clusters": lambda: self.get_threshold_by_n_clusters(n_clusters),
         }
-        return methods[self.cluster_selection_method_]()
+        return methods[method]()
 
-    def get_labels_by_threshold(
+    def _labels_by_threshold(
         self,
         persistence_threshold: float,
         merge_disconnected: bool = True,
@@ -259,132 +276,199 @@ class ToMAToCore:
 
         return new_labels
 
-    def _assign_default_labels(self):
+    def _assign_labels(
+        self,
+        sig,
+        persistence_threshold,
+        cluster_selection_method,
+        n_clusters,
+        min_clusters,
+        noise_threshold,
+    ):
         """
-        Assign default cluster labels using the configured cluster selection method.
+        Label assignment logic shared by fit() and get_labels().
 
-        Sets `self.labels_` and `self.modes_` from the threshold chosen by the
-        resolved cluster selection method (`self.cluster_selection_method_`).
+        Uses the given parameters rather than the constructor's, and does not
+        store anything on the estimator. Returns
+        (labels, modes, full_labels, probabilities, method, threshold).
         """
-        self.cluster_selection_method_ = resolve_cluster_selection_method(
-            self.cluster_selection_method,
-            n_clusters=self.n_clusters,
-            persistence_threshold=self.persistence_threshold,
-            sig=self.sig,
+        method = resolve_cluster_selection_method(
+            cluster_selection_method,
+            n_clusters=n_clusters,
+            persistence_threshold=persistence_threshold,
+            sig=sig,
         )
 
         if self.all_modes_.shape[0] == 1:
-            self.threshold_ = np.inf
+            threshold = np.inf
             labels = np.zeros(self.f_.shape[0], dtype=np.int64)
             critical_points = {0: int(self.all_modes_[0])}
         else:
-            self.threshold_ = self._select_threshold()
+            threshold = self._select_threshold(method, persistence_threshold, n_clusters)
             if self.verbose:
-                print(
-                    f"[ToMATo] Threshold from {self.cluster_selection_method_}: "
-                    f"{self.threshold_:.6f}"
-                )
-            labels, critical_points = self.get_labels_by_threshold(
-                self.threshold_, return_critical_points=True
+                print(f"[ToMATo] Threshold from {method}: {threshold:.6f}")
+            labels, critical_points = self._labels_by_threshold(
+                threshold, return_critical_points=True
             )
 
-        if (
-            self.min_clusters is not None
-            and self.cluster_selection_method_ != "n_clusters"
-        ):
+        if min_clusters is not None and method != "n_clusters":
             current_n = len(np.unique(labels[labels >= 0]))
             n_modes = self.all_modes_.shape[0]
-            if current_n < min(self.min_clusters, n_modes):
+            if current_n < min(min_clusters, n_modes):
                 if self.verbose:
                     print(
-                        f"[ToMATo] Adjusting for min_clusters={self.min_clusters} (was {current_n})"
+                        f"[ToMATo] Adjusting for min_clusters={min_clusters} (was {current_n})"
                     )
-                if self.min_clusters >= n_modes:
-                    self.threshold_ = 0.0
+                if min_clusters >= n_modes:
+                    threshold = 0.0
                 else:
-                    self.threshold_ = self.get_threshold_by_n_clusters(
-                        self.min_clusters
-                    )
-                labels, critical_points = self.get_labels_by_threshold(
-                    self.threshold_, return_critical_points=True
+                    threshold = self.get_threshold_by_n_clusters(min_clusters)
+                labels, critical_points = self._labels_by_threshold(
+                    threshold, return_critical_points=True
                 )
 
         probabilities = self.assignment_probabilities(labels)
 
-        self._full_labels = labels
+        full_labels = labels
+        if noise_threshold is not None:
+            labels = full_labels.copy()
+            labels[probabilities < noise_threshold] = -1
+
+        return labels, critical_points, full_labels, probabilities, method, threshold
+
+    def _assign_default_labels(self):
+        """
+        Assign default cluster labels using the parameters given to the constructor.
+
+        Sets `self.labels_` and `self.modes_`.
+        """
+        (
+            labels,
+            critical_points,
+            full_labels,
+            probabilities,
+            method,
+            threshold,
+        ) = self._assign_labels(
+            sig=self.sig,
+            persistence_threshold=self.persistence_threshold,
+            cluster_selection_method=self.cluster_selection_method,
+            n_clusters=self.n_clusters,
+            min_clusters=self.min_clusters,
+            noise_threshold=self.noise_threshold if self.filter_noise else None,
+        )
+
+        self.cluster_selection_method_ = method
+        self.threshold_ = threshold
+        self._full_labels = full_labels
         self.labels_ = labels
         self._full_probabilities = probabilities
         self.probabilities_ = probabilities
         self.modes_ = critical_points
 
-        if self.noise_aware:
-            self.labels_ = ToMAToCore.noise_aware_labels(self)
-
         return
 
-    def _standardize_labels(self):
+    def _standardize_labels(self, labels, modes=None):
         """
         Ensure that non-negative labels are contiguous in [0, 1, 2, ...].
+
+        Modifies `labels` in place and returns the updated `modes` (if given).
         """
-        labels = self.labels_
         mask = labels >= 0
 
         if not mask.any():
-            return
+            return modes
 
         lab = labels[mask].astype(np.int64, copy=False)
         present = np.bincount(lab) > 0
 
         if present.all():
-            return
+            return modes
 
         mapping = np.cumsum(present) - 1
         labels[mask] = mapping[lab]
-        self.modes_ = {
+        if modes is None:
+            return None
+        return {
             int(mapping[k]): v
-            for k, v in self.modes_.items()
+            for k, v in modes.items()
             if k < present.size and present[k]
         }
 
-        return
-
-    def noise_aware_labels(
+    def get_labels(
         self,
-        threshold: float = 0.9,
-        labels: np.ndarray = None,
-        probabilities: np.ndarray = None,
+        sig: Optional[float] = None,
+        persistence_threshold: Optional[float] = None,
+        cluster_selection_method: Optional[str] = None,
+        filter_noise: Optional[bool] = None,
+        noise_threshold: Optional[float] = None,
+        n_clusters: Optional[int] = None,
+        min_clusters: Optional[int] = None,
     ) -> np.ndarray:
         """
-        Return noise-aware labeling from a prior set of labels and probabilities.
+        Return cluster labels without modifying `labels_`.
 
-        Parameters
-        ----------
-        labels : np.ndarray
-            Array of cluster labels.
-        probabilities : dict
-            Array of cluster assignment probabilities.
-        threshold : float
-            Cluster assignment probability threshold. Points with lower assignment
-            probability than threshold will return as noise.
-
-        Returns
-        -------
-        new_labels : np.ndarray
-            New labels with noise entries as -1.
+        Parameters are as in the constructor, but None means "use the fitted
+        value". With no arguments, returns the fit labels. With only
+        filter_noise and/or noise_threshold, re-filters the fitted clustering
+        (a threshold alone implies filter_noise=True). If any selection
+        parameter (sig, persistence_threshold, cluster_selection_method,
+        n_clusters, min_clusters) is given, selection is re-run; unset
+        parameters fall back to the constructor's values, except that the first
+        four replace the constructor's selection parameters as a group.
         """
-        if labels is None:
-            if probabilities is not None:
-                raise ValueError("Must supply both labels and label probabilities.")
-            labels = self._full_labels
-            probabilities = self._full_probabilities
-        elif probabilities is None:
-            raise ValueError("Must supply both labels and label probabilities.")
+        if getattr(self, "labels_", None) is None:
+            raise ValueError("Must call fit() first")
 
-        new_labels = labels.copy()
-        is_noise = probabilities < threshold
-        new_labels[is_noise] = -1
+        # Labels are computed on deduplicated data; expand to the input rows.
+        inverse = getattr(self, "_duplicate_inverse", None)
 
-        return new_labels
+        filter_given = filter_noise is not None
+        threshold_given = noise_threshold is not None
+        if filter_noise is False and threshold_given:
+            raise ValueError("noise_threshold has no effect with filter_noise=False.")
+        if filter_given or threshold_given:
+            use_filter = filter_noise if filter_given else True
+            threshold = self.noise_threshold if not threshold_given else noise_threshold
+        else:
+            use_filter, threshold = self.filter_noise, self.noise_threshold
+        noise = threshold if use_filter else None
+
+        selection = (sig, persistence_threshold, cluster_selection_method, n_clusters)
+        selection_given = any(v is not None for v in selection)
+
+        if not selection_given and min_clusters is None:
+            if not (filter_given or threshold_given):
+                return self.labels_
+            labels = self._full_labels.copy()
+            if noise is not None:
+                labels[self._full_probabilities < noise] = -1
+            self._standardize_labels(labels)
+            return labels if inverse is None else labels[inverse]
+
+        if selection_given:
+            if cluster_selection_method is not None:
+                validate_cluster_selection_method(cluster_selection_method)
+            self._validate_selection_parameters(
+                cluster_selection_method, persistence_threshold, n_clusters
+            )
+        else:
+            sig = self.sig
+            persistence_threshold = self.persistence_threshold
+            cluster_selection_method = self.cluster_selection_method
+            n_clusters = self.n_clusters
+
+        labels, modes, *_ = self._assign_labels(
+            sig=sig,
+            persistence_threshold=persistence_threshold,
+            cluster_selection_method=cluster_selection_method,
+            n_clusters=n_clusters,
+            min_clusters=self.min_clusters if min_clusters is None else min_clusters,
+            noise_threshold=noise,
+        )
+        labels = labels.copy()
+        self._standardize_labels(labels, modes)
+        return labels if inverse is None else labels[inverse]
 
     def assignment_probabilities(self, labels=None):
         if labels is None:
@@ -562,7 +646,7 @@ class ToMAToCore:
         if self.verbose:
             print("[ToMATo] Assigning default labels...")
         self._assign_default_labels()
-        self._standardize_labels()
+        self.modes_ = self._standardize_labels(self.labels_, self.modes_)
         if self.verbose:
             n_clusters = len(np.unique(self.labels_[self.labels_ >= 0]))
             n_noise = np.sum(self.labels_ == -1)
