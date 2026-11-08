@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import scipy.sparse as sp
@@ -6,35 +6,8 @@ from numba import njit, prange
 from scipy.sparse import csr_matrix
 
 from tomato.core_ import ToMAToCore
+from tomato._graph_utils import hop_ball
 from tomato._numpy_utils import ordered_unique
-
-
-def hop_ball(graph: csr_matrix, h: int) -> csr_matrix:
-    """
-    Boolean matrix of h-hop balls: row v marks every vertex within h hops of v,
-    including v itself. Only the final power is kept.
-    """
-    if h < 1:
-        raise ValueError("h must be >= 1.")
-
-    n = graph.shape[0]
-    A1 = (graph.astype(bool) + sp.eye(n, format="csr", dtype=bool)).tocsr()
-
-    B = A1
-    for _ in range(h - 1):
-        B_next = (B @ A1).tocsr()
-        if B_next.nnz == B.nnz:
-            return B_next
-        B = B_next
-
-    return B
-
-
-def hop_balls(graph: csr_matrix, h_max: int) -> Dict[int, csr_matrix]:
-    """
-    Boolean k-hop balls for every k = 1..h_max.
-    """
-    return {h: hop_ball(graph, h) for h in range(1, h_max + 1)}
 
 
 @njit(parallel=True, cache=True)
@@ -303,8 +276,7 @@ class GeoToMATo(ToMAToCore):
 
         if self.sample_weight is not None and self.drop_duplicates:
             raise ValueError(
-                "drop_duplicates=True is not supported together with "
-                "sample_weight."
+                "drop_duplicates=True is not supported together with " "sample_weight."
             )
 
         if self.drop_duplicates:
