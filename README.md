@@ -93,18 +93,31 @@ clf = ToMATo(n_clusters=3).fit(X)
 clf = ToMATo(min_clusters=3).fit(X)
 ```
 
-### Noise-aware labeling
+### Post-fit cluster adjustments
 
-ToMATo computes a pointwise assignment probability for each point's assigned cluster. With noise awareness enabled, the default threshold is `0.9`: points with assignment probabilities below the threshold are classified as noise and receive the label `-1`. The threshold can be changed after fitting with `noise_aware_labels(threshold=...)`.
+Selection parameters can also be changed after fitting, without recomputing persistence:
 
 ```python
-# Run with noise awareness (points with probability <90% become noise)
-clf = ToMATo(noise_aware=True).fit(X)
+clf = ToMATo().fit(X)
+labels = clf.get_labels(n_clusters=4)
+labels = clf.get_labels(persistence_threshold=0.2, filter_noise=True)
+```
+
+### Noise-aware labeling
+
+ToMATo computes a pointwise assignment probability for each point's assigned cluster. With `filter_noise=True`, points whose assignment probability falls below `noise_threshold` (default `0.9`) are classified as noise and receive the label `-1`. The labeling can be re-filtered after fitting with `get_labels`, which does not modify `labels_`.
+
+```python
+# Run with noise filtering enabled
+clf = ToMATo(filter_noise=True).fit(X)
 labels = clf.labels_  # Noise labeled -1
 
-# Optional: Specify a custom threshold after fit
-clf = ToMATo(...).fit(X)
-labels = clf.noise_aware_labels(threshold=0.75)
+# Optional: Use a custom threshold
+clf = ToMATo(filter_noise=True, noise_threshold=0.75).fit(X)
+
+# Optional: Apply a noise filter without refitting
+clf = ToMATo().fit(X)
+labels = clf.get_labels(noise_threshold=0.75)
 ```
 
 ### Soft clustering
