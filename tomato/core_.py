@@ -10,6 +10,7 @@ from tomato.cluster_selection import (
     threshold_by_max_jump,
     threshold_by_n_clusters,
     threshold_by_profile_likelihood,
+    threshold_by_raw_max_jump,
     validate_cluster_selection_method,
 )
 from tomato.graph_persistence import GraphPersistence
@@ -39,6 +40,7 @@ class ToMAToCore:
             * "profile_likelihood": profile-likelihood split of the log-ratio
             persistences, accepted only if significant, otherwise the largest raw jump.
             * "max_jump": split at the largest gap by gap statistic.
+            * "raw_max_jump": split at the largest gap in sorted raw persistence.
             * "persistence_threshold": use persistence_threshold directly.
             * "n_clusters": use the threshold that yields n_clusters clusters.
         An explicitly set method is used as given and the other parameters are not
@@ -169,6 +171,21 @@ class ToMAToCore:
         self.split_pvalue_ = res.pvalue
         return res.threshold
 
+    def get_threshold_by_raw_max_jump(self):
+        """
+        Split at the largest gap in sorted raw persistence.
+        Sets split_method_ and split_pvalue_ (always NaN: no test is run).
+        """
+        gp = getattr(self, "graph_persistence_", None)
+        if gp is None:
+            raise ValueError("Must call fit() first")
+        if gp.persistences_ is None:
+            raise ValueError("Must call fit() before get_threshold_by_raw_max_jump()")
+        res = threshold_by_raw_max_jump(gp.persistences_)
+        self.split_method_ = res.method
+        self.split_pvalue_ = res.pvalue
+        return res.threshold
+
     def _select_threshold(
         self, method: str, persistence_threshold, n_clusters
     ) -> float:
@@ -178,6 +195,7 @@ class ToMAToCore:
         methods = {
             "profile_likelihood": self.get_threshold_by_profile_likelihood,
             "max_jump": self.get_threshold_by_max_jump,
+            "raw_max_jump": self.get_threshold_by_raw_max_jump,
             "persistence_threshold": lambda: persistence_threshold,
             "n_clusters": lambda: self.get_threshold_by_n_clusters(n_clusters),
         }

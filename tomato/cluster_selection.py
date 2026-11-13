@@ -11,6 +11,16 @@ from scipy import stats
 MIN_NOISE_SPACINGS = 3
 N_NULL_SIMS = 1000
 DEFAULT_ALPHA = 0.2
+LOG_RATIO_TOL = 1e-8
+MIN_KEPT = MIN_NOISE_SPACINGS + 1
+
+CLUSTER_SELECTION_METHODS = (
+    "profile_likelihood",
+    "max_jump",
+    "raw_max_jump",
+    "persistence_threshold",
+    "n_clusters",
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,28 @@ def _finite_pairs(persistences, diagram):
     r = log_ratio_persistences(diagram)
     finite = np.isfinite(p) & np.isfinite(r)
     return p[finite], r[finite]
+
+
+def _drop_zero_ratio_modes(p, r, tol=LOG_RATIO_TOL, min_kept=MIN_KEPT):
+    """
+    Drop modes with log-ratio persistence ~0 (death ~ birth in relative terms).
+    If fewer than min_kept modes would remain, return the inputs unchanged.
+    """
+    keep = r > tol
+    if keep.sum() < min_kept:
+        return p, r
+    return p[keep], r[keep]
+
+
+def _gap_inputs(p, r):
+    """
+    Log-ratio persistences sorted ascending, with their raw counterparts,
+    for the gap analysis: zero-ratio modes dropped (when safe) and the most
+    persistent mode excluded.
+    """
+    p, r = _drop_zero_ratio_modes(p, r)
+    order = np.argsort(r)[:-1]
+    return r[order], p[order]
 
 
 def profile_likelihood_split(x_sorted) -> Optional[int]:
@@ -191,12 +223,7 @@ def _null_gap_statistics_cached(n: int, n_sims: int, min_spacings: int) -> np.nd
     hi = np.minimum(n_window // 2, n - 2)
     scale = 0.5 * (padded[rows, lo] + padded[rows, hi]) / np.log(2)
 
-    valid = (
-        (q >= 2)
-        & (n_window >= min_spacings)
-        & np.isfinite(scale)
-        & (scale > 1e-12)
-    )
+    valid = (q >= 2) & (n_window >= min_spacings) & np.isfinite(scale) & (scale > 1e-12)
     out = gap_e[valid] / scale[valid]
     out.setflags(write=False)
     return out
@@ -254,12 +281,9 @@ def threshold_by_profile_likelihood(
     p, r = _finite_pairs(persistences, diagram)
 
     if len(r) < 3:
-        return ThresholdResult(
-            largest_raw_jump(p) if len(p) else 0.0, "raw_max_jump"
-        )
+        return ThresholdResult(largest_raw_jump(p) if len(p) else 0.0, "raw_max_jump")
 
-    order = np.argsort(r)[:-1]
-    r_sorted, p_sorted = r[order], p[order]
+    r_sorted, p_sorted = _gap_inputs(p, r)
 
     pvalue = np.nan
     q = profile_likelihood_split(r_sorted)
@@ -287,8 +311,7 @@ def threshold_by_max_jump(persistences, diagram) -> ThresholdResult:
             largest_raw_jump(p) if len(p) else 0.0, "raw_max_jump"
         )
 
-    order = np.argsort(r)[:-1]
-    r_sorted, p_sorted = r[order], p[order]
+    r_sorted, p_sorted = _gap_inputs(p, r)
 
     gaps = gap_statistics(r_sorted)
     if not np.any(np.isfinite(gaps)):
@@ -297,6 +320,18 @@ def threshold_by_max_jump(persistences, diagram) -> ThresholdResult:
     q = int(np.nanargmax(gaps))
     threshold = 0.5 * (p_sorted[q - 1] + p_sorted[q])
     return ThresholdResult(float(threshold), "max_jump")
+
+
+def threshold_by_raw_max_jump(persistences) -> ThresholdResult:
+    """
+    Split at the largest gap in sorted raw persistence, at the midpoint of the
+    gap. The most persistent class is excluded. No log-ratio transform, no
+    significance test.
+    """
+    p = np.asarray(persistences, dtype=float)
+    p = p[np.isfinite(p)]
+    threshold = largest_raw_jump(p) if len(p) else 0.0
+    return ThresholdResult(threshold, "raw_max_jump")
 
 
 def threshold_by_n_clusters_after_merging(
@@ -402,14 +437,6 @@ def threshold_by_n_clusters(
     return threshold
 
 
-CLUSTER_SELECTION_METHODS = (
-    "profile_likelihood",
-    "max_jump",
-    "persistence_threshold",
-    "n_clusters",
-)
-
-
 def validate_cluster_selection_method(method: str) -> str:
     """
     Return method if it is a known cluster selection method, otherwise raise.
@@ -442,7 +469,7 @@ def resolve_cluster_selection_method(
 
     candidates = (
         ("n_clusters", "n_clusters", n_clusters),
-        ("persistence_threshold", "persistence_threshold", persistence_threshold)
+        ("persistence_threshold", "persistence_threshold", persistence_threshold),
     )
     given = [(name, chosen) for name, chosen, value in candidates if value is not None]
     if not given:
