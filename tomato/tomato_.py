@@ -32,6 +32,8 @@ class ToMATo(ToMAToCore):
         If True, use NNDescent for approximate kNN.
     n_clusters : int or None
         Target number of clusters to maintain.
+    use_stability : bool
+        If True, weight persistence by cluster size (stability).
     min_clusters : int or None
         Minimum number of clusters to maintain.
     enforce_connected : bool
@@ -67,6 +69,7 @@ class ToMATo(ToMAToCore):
         precomputed_graph: Optional[csr_matrix] = None,
         random_state: Optional[int] = None,
         verbose: bool = False,
+        use_stability: bool = False,
     ) -> None:
         super().__init__(
             cluster_selection_method=cluster_selection_method,
@@ -77,6 +80,7 @@ class ToMATo(ToMAToCore):
             n_clusters=n_clusters,
             min_clusters=min_clusters,
             ascending=False,
+            use_stability=use_stability,
             use_edge_gradients=False,
             verbose=verbose,
         )
