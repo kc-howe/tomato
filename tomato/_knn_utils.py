@@ -56,6 +56,10 @@ def build_knn_graph(
     else:
         query_data = query
 
+    n_neighbors = min(n_neighbors, max(X.shape[0] - 1, 0))
+    if n_neighbors == 0:
+        return csr_matrix((query_data.shape[0], X.shape[0]), dtype=np.float64)
+
     if use_approximate_knn:
         # Heuristic parameters for NNDescent (from UMAP)
         n_trees = min(64, 5 + int(round((X.shape[0]) ** 0.5 / 20.0)))
