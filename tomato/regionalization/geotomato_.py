@@ -148,23 +148,25 @@ class GeoToMATo(ToMAToCore):
         Optional per-sample weights (e.g. population) defining the
         measure DTM is computed against. Must align with the rows of X
         passed to `fit`. Defaults to uniform weights.
-    persistence_threshold : float or None
-        Persistence threshold used directly.
     cluster_selection_method : str or None
         Strategy for choosing the persistence threshold automatically
         (for example "max_jump"). Passed through to `ToMAToCore`; see its
         documentation for the supported options. Ignored if
         `persistence_threshold` is given.
+    persistence_threshold : float or None
+        Persistence threshold used directly.
+    n_clusters : int or None
+        Target number of clusters to maintain.
+    min_clusters : int or None
+        Minimum number of clusters to maintain.
+    max_clusters : int or None
+        Maximum number of clusters to maintain.
     filter_noise : bool
         If True, points whose assignment probability is below noise_threshold
         are labeled -1 (noise).
     noise_threshold : float
         Assignment probability below which points are labeled as noise.
         Only meaningful when filter_noise is True. Default 0.9.
-    n_clusters : int or None
-        Target number of clusters to maintain.
-    min_clusters : int or None
-        Minimum number of clusters to maintain.
     drop_duplicates : bool
         Remove duplicate attribute rows before fitting. Not supported
         together with sample_weight (duplicate rows may carry different
@@ -180,12 +182,13 @@ class GeoToMATo(ToMAToCore):
         min_neighbors: int = 6,
         include_self: bool = True,
         sample_weight: Optional[np.ndarray] = None,
-        persistence_threshold: Optional[float] = None,
         cluster_selection_method: Optional[str] = None,
-        filter_noise: bool = False,
-        noise_threshold: float = 0.9,
+        persistence_threshold: Optional[float] = None,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
+        max_clusters: Optional[int] = None,
+        filter_noise: bool = False,
+        noise_threshold: float = 0.9,
         drop_duplicates: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -197,6 +200,7 @@ class GeoToMATo(ToMAToCore):
             noise_threshold=noise_threshold,
             n_clusters=n_clusters,
             min_clusters=min_clusters,
+            max_clusters=max_clusters,
             ascending=False,
             use_edge_gradients=False,
             verbose=verbose,

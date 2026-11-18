@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
 
 import numpy as np
@@ -5,9 +6,10 @@ import scipy.sparse as sp
 from numba import njit
 from scipy.sparse import coo_matrix, csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree, connected_components
+from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
-from tomato._union_find import find
+from tomato._union_find import find, UnionFind
 
 
 def first_entry_per_row(A, fill=-1):
@@ -508,7 +510,7 @@ def _find_best_bridge(
     return best
 
 
-def merge_components(
+def merge_components_approximate(
     graph: csr_matrix,
     pos: np.ndarray,
     n_seeds: int = 5,
@@ -602,6 +604,201 @@ def merge_components(
             ),
             shape=graph.shape,
         ).tocsr()
+
+    return graph
+
+
+def _query_pair(
+    pair,
+    groups,
+    trees,
+    pos,
+):
+    """
+    Find the exact minimum Euclidean bridge between two components.
+    """
+    k, i, j = pair
+
+    nodes_i = groups[i]
+    nodes_j = groups[j]
+
+    if len(nodes_i) <= len(nodes_j):
+        distances, indices = trees[j].query(
+            pos[nodes_i],
+            k=1,
+            workers=-1,
+        )
+
+        idx = np.argmin(distances)
+
+        return (
+            k,
+            nodes_i[idx],
+            nodes_j[indices[idx]],
+            distances[idx],
+        )
+
+    distances, indices = trees[i].query(
+        pos[nodes_j],
+        k=1,
+        workers=-1,
+    )
+
+    idx = np.argmin(distances)
+
+    return (
+        k,
+        nodes_i[indices[idx]],
+        nodes_j[idx],
+        distances[idx],
+    )
+
+
+def merge_components(
+    graph: csr_matrix,
+    pos: np.ndarray,
+    workers: int = -1,
+) -> csr_matrix:
+    """
+    Connect disconnected components using exact Euclidean minimum
+    bridges and Kruskal's minimum spanning tree algorithm.
+
+    Computes the minimum bridge between every pair of original
+    components exactly once.
+
+    Component-pair queries can be parallelized using threads.
+    """
+    graph = graph.copy()
+    n = graph.shape[0]
+
+    n_components, labels = connected_components(
+        graph,
+        directed=False,
+    )
+
+    if n_components <= 1:
+        return graph
+
+    pos = np.asarray(pos, dtype=np.float64)
+
+    if pos.ndim != 2 or pos.shape[0] != n:
+        raise ValueError(
+            "pos must have shape (graph.shape[0], n_dimensions)"
+        )
+
+    if not np.all(np.isfinite(pos)):
+        raise ValueError("pos must contain only finite coordinates")
+
+    # Group points by original component.
+    order = np.argsort(labels)
+    counts = np.bincount(labels)
+
+    offsets = np.empty(n_components + 1, dtype=np.intp)
+    offsets[0] = 0
+    np.cumsum(counts, out=offsets[1:])
+
+    groups = [
+        order[offsets[i]:offsets[i + 1]]
+        for i in range(n_components)
+    ]
+
+    # Build one KD-tree per original component.
+    trees = [
+        cKDTree(pos[nodes])
+        for nodes in groups
+    ]
+
+    # Precompute all unique component pairs.
+    pair_i, pair_j = np.triu_indices(
+        n_components,
+        k=1,
+    )
+
+    n_edges = len(pair_i)
+
+    edge_u = np.empty(n_edges, dtype=np.intp)
+    edge_v = np.empty(n_edges, dtype=np.intp)
+    edge_dist = np.empty(n_edges, dtype=np.float64)
+
+    pairs = zip(
+        range(n_edges),
+        pair_i,
+        pair_j,
+    )
+
+    # Compute all pairwise minimum bridges.
+    with ThreadPoolExecutor(
+        max_workers=None if workers == -1 else workers
+    ) as executor:
+        results = executor.map(
+            _query_pair,
+            pairs,
+            [groups] * n_edges,
+            [trees] * n_edges,
+            [pos] * n_edges,
+        )
+
+        for k, u, v, distance in results:
+            edge_u[k] = u
+            edge_v[k] = v
+            edge_dist[k] = distance
+
+    # Sort cached bridges by increasing distance.
+    order = np.argsort(edge_dist)
+
+    edge_u = edge_u[order]
+    edge_v = edge_v[order]
+    edge_dist = edge_dist[order]
+
+    # Kruskal's algorithm over the cached component graph.
+    uf = UnionFind(n_components)
+
+    bridge_u = np.empty(n_components - 1, dtype=np.intp)
+    bridge_v = np.empty(n_components - 1, dtype=np.intp)
+    bridge_w = np.empty(n_components - 1, dtype=np.float64)
+
+    tiny = np.finfo(np.float64).tiny
+    accepted = 0
+
+    for u, v, distance in zip(edge_u, edge_v, edge_dist):
+        if uf.union(labels[u], labels[v]):
+            bridge_u[accepted] = u
+            bridge_v[accepted] = v
+            bridge_w[accepted] = max(distance, tiny)
+
+            accepted += 1
+
+            if accepted == n_components - 1:
+                break
+
+    if accepted != n_components - 1:
+        raise RuntimeError("Unable to connect all components")
+
+    # Add all bridges in one sparse matrix construction.
+    graph_coo = graph.tocoo()
+
+    graph = coo_matrix(
+        (
+            np.concatenate((
+                graph_coo.data,
+                bridge_w,
+                bridge_w,
+            )),
+            (
+                np.concatenate((
+                    graph_coo.row,
+                    bridge_u,
+                    bridge_v,
+                )),
+                np.concatenate((
+                    graph_coo.col,
+                    bridge_v,
+                    bridge_u,
+                )),
+            ),
+        ),
+        shape=graph.shape,
+    ).tocsr()
 
     return graph
 

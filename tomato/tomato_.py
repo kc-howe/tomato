@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -6,7 +7,7 @@ from scipy.sparse import csr_matrix
 from tomato.core_ import ToMAToCore
 from tomato._knn_utils import build_knn_graph
 from tomato.metric import check_metric
-from tomato._graph_utils import first_entry_per_row, merge_components
+from tomato._graph_utils import first_entry_per_row, merge_components, merge_components_approximate
 from tomato._numpy_utils import ordered_unique
 
 
@@ -18,35 +19,39 @@ class ToMATo(ToMAToCore):
     ----------
     n_neighbors : int
         Number of neighbors for the kNN graph.
-    metric : str
-        Distance metric for kNN graph construction.
+    cluster_selection_method : str or None
+        Strategy for selecting the persistence threshold.
     persistence_threshold : float or None
         Persistence threshold used directly.
+    n_clusters : int or None
+        Target number of clusters to maintain.
+    min_clusters : int or None
+        Minimum number of clusters to maintain.
+    max_clusters : int or None
+        Maximum number of clusters to maintain.
+    use_stability : bool
+        If True, weight persistence by cluster size (stability).
     filter_noise : bool
         If True, points whose assignment probability is below noise_threshold
         are labeled -1 (noise).
     noise_threshold : float
         Assignment probability below which points are labeled as noise.
         Only meaningful when filter_noise is True. Default 0.9.
+    metric : str
+        Distance metric for kNN graph construction.
     use_approximate_knn : bool
         If True, use NNDescent for approximate kNN.
-    n_clusters : int or None
-        Target number of clusters to maintain.
-    use_stability : bool
-        If True, weight persistence by cluster size (stability).
-    min_clusters : int or None
-        Minimum number of clusters to maintain.
-    enforce_connected : bool
-        Add approximately minimal spanning edges to ensure connectivity.
-        NOTE: Does not apply to precomputed graphs.
-    drop_duplicates : bool
-        Remove duplicates from input data before graph construction.
     precomputed_graph : csr_matrix or None
         Optional precomputed graph. If provided, it is used directly as
         the graph passed to ToMATo and for computing DTM. For
         regionalization, pass a dual (contiguity) graph whose edge
         weights are attribute-space distances between adjacent regions,
         not raw geographic distances.
+    enforce_connected : bool
+        Add approximately minimal spanning edges to ensure connectivity.
+        NOTE: Does not apply to precomputed graphs.
+    drop_duplicates : bool
+        Remove duplicates from input data before graph construction.
     random_state : int or None
         Random seed for reproducibility.
     verbose : bool
@@ -56,20 +61,21 @@ class ToMATo(ToMAToCore):
     def __init__(
         self,
         n_neighbors: int = 25,
-        metric: str = "euclidean",
         cluster_selection_method: Optional[str] = None,
         persistence_threshold: Optional[float] = None,
-        filter_noise: bool = False,
-        noise_threshold: float = 0.9,
-        use_approximate_knn: bool = False,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
+        max_clusters: Optional[int] = None,
+        use_stability: bool = False,
+        filter_noise: bool = False,
+        noise_threshold: float = 0.9,
+        metric: str = "euclidean",
+        use_approximate_knn: bool = False,
+        precomputed_graph: Optional[csr_matrix] = None,
         enforce_connected: bool = False,
         drop_duplicates: bool = False,
-        precomputed_graph: Optional[csr_matrix] = None,
         random_state: Optional[int] = None,
         verbose: bool = False,
-        use_stability: bool = False,
     ) -> None:
         super().__init__(
             cluster_selection_method=cluster_selection_method,
@@ -79,6 +85,7 @@ class ToMATo(ToMAToCore):
             noise_threshold=noise_threshold,
             n_clusters=n_clusters,
             min_clusters=min_clusters,
+            max_clusters=max_clusters,
             ascending=False,
             use_stability=use_stability,
             use_edge_gradients=False,
@@ -174,6 +181,7 @@ class ToMATo(ToMAToCore):
                     f"[ToMATo] Building kNN graph "
                     f"(k={self.n_neighbors}, metric={self.metric})..."
                 )
+                distance_weights = True
 
             graph = build_knn_graph(
                 X,
@@ -196,12 +204,22 @@ class ToMATo(ToMAToCore):
             if self.verbose:
                 print("[ToMATo] Enforcing connectivity...")
 
-            graph = merge_components(
-                graph,
-                X,
-                metric=self.metric,
-                random_state=self.random_state,
-            )
+            if self.metric in ("euclidean", "sqeuclidean", "l2"):
+                graph = merge_components(
+                    graph,
+                    X
+                )
+            else:
+                warnings.warn(
+                    f"Exact connectivity enforcement is only implemented for Euclidean distances. "
+                    f"Using approximate connectivity enforcement for metric '{self.metric}'."
+                )
+                graph = merge_components_approximate(
+                    graph,
+                    X,
+                    metric=self.metric,
+                    random_state=self.random_state,
+                )
 
             if self.verbose:
                 print(f"[ToMATo] Graph connectivity enforced: " f"{graph.nnz} edges")

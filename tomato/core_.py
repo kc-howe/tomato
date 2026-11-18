@@ -51,21 +51,25 @@ class ToMAToCore:
     persistence_threshold : float or None
         Persistence threshold used directly. Required when
         cluster_selection_method is "persistence_threshold".
+    sig : float or None
+        Significance level used by profile-likelihood selection.
+    n_clusters : int or None
+        Number of clusters to maintain. Required when cluster_selection_method
+        is "n_clusters".
+    min_clusters: int or None
+        Minimum number of clusters to maintain (overrides threshold if needed).
+    max_clusters: int or None
+        Maximum number of clusters to maintain (overrides threshold if needed).
+    use_stability : bool
+        If True, weight persistence by cluster size (stability).
     filter_noise : bool
         If True, points whose assignment probability is below noise_threshold
         are labeled -1 (noise).
     noise_threshold : float
         Assignment probability below which points are labeled as noise.
         Only meaningful when filter_noise is True. Default 0.9.
-    n_clusters : int or None
-        Number of clusters to maintain. Required when cluster_selection_method
-        is "n_clusters".
-    min_clusters: int or None
-        Minimum number of clusters to maintain (overrides threshold if needed).
     ascending : bool
         If True, cluster ascending modes; if False, descending modes.
-    use_stability : bool
-        If True, weight persistence by cluster size (stability).
     use_edge_gradients : bool
         If True, treat graph edge weights as function gradients.
     verbose : bool
@@ -74,15 +78,16 @@ class ToMAToCore:
 
     def __init__(
         self,
-        sig: Optional[float] = None,
-        persistence_threshold: Optional[float] = None,
         cluster_selection_method: Optional[str] = None,
-        filter_noise: bool = False,
-        noise_threshold: float = DEFAULT_NOISE_THRESHOLD,
+        persistence_threshold: Optional[float] = None,
+        sig: Optional[float] = None,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
-        ascending: bool = True,
+        max_clusters: Optional[int] = None,
         use_stability: bool = False,
+        filter_noise: bool = False,
+        noise_threshold: float = DEFAULT_NOISE_THRESHOLD,
+        ascending: bool = True,
         use_edge_gradients: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -96,6 +101,8 @@ class ToMAToCore:
         self.noise_threshold = noise_threshold
         self.n_clusters = n_clusters
         self.min_clusters = min_clusters
+        self.max_clusters = max_clusters
+        self._validate_cluster_bounds(min_clusters, max_clusters)
         self.ascending = ascending
         self.use_stability = use_stability
         self.use_edge_gradients = use_edge_gradients
@@ -104,6 +111,17 @@ class ToMAToCore:
             self.cluster_selection_method, self.persistence_threshold, self.n_clusters
         )
         return
+
+    @staticmethod
+    def _validate_cluster_bounds(min_clusters, max_clusters) -> None:
+        if max_clusters is not None and max_clusters < 1:
+            raise ValueError("max_clusters must be >= 1.")
+        if (
+            min_clusters is not None
+            and max_clusters is not None
+            and min_clusters > max_clusters
+        ):
+            raise ValueError("min_clusters cannot exceed max_clusters.")
 
     @staticmethod
     def _validate_selection_parameters(
@@ -301,6 +319,7 @@ class ToMAToCore:
         cluster_selection_method,
         n_clusters,
         min_clusters,
+        max_clusters,
         noise_threshold,
     ):
         """
@@ -345,6 +364,18 @@ class ToMAToCore:
                     threshold, return_critical_points=True
                 )
 
+        if max_clusters is not None:
+            current_n = len(np.unique(labels[labels >= 0]))
+            if current_n > max_clusters:
+                if self.verbose:
+                    print(
+                        f"[ToMATo] Adjusting for max_clusters={max_clusters} (was {current_n})"
+                    )
+                threshold = self.get_threshold_by_n_clusters(max_clusters)
+                labels, critical_points = self._labels_by_threshold(
+                    threshold, return_critical_points=True
+                )
+
         probabilities = self.assignment_probabilities(labels)
 
         full_labels = labels
@@ -373,6 +404,7 @@ class ToMAToCore:
             cluster_selection_method=self.cluster_selection_method,
             n_clusters=self.n_clusters,
             min_clusters=self.min_clusters,
+            max_clusters=self.max_clusters,
             noise_threshold=self.noise_threshold if self.filter_noise else None,
         )
 
@@ -422,6 +454,7 @@ class ToMAToCore:
         noise_threshold: Optional[float] = None,
         n_clusters: Optional[int] = None,
         min_clusters: Optional[int] = None,
+        max_clusters: Optional[int] = None,
     ) -> np.ndarray:
         """
         Return cluster labels without modifying `labels_`.
@@ -431,7 +464,7 @@ class ToMAToCore:
         filter_noise and/or noise_threshold, re-filters the fitted clustering
         (a threshold alone implies filter_noise=True). If any selection
         parameter (sig, persistence_threshold, cluster_selection_method,
-        n_clusters, min_clusters) is given, selection is re-run; unset
+        n_clusters, min_clusters, max_clusters) is given, selection is re-run; unset
         parameters fall back to the constructor's values, except that the first
         four replace the constructor's selection parameters as a group.
         """
@@ -455,7 +488,7 @@ class ToMAToCore:
         selection = (sig, persistence_threshold, cluster_selection_method, n_clusters)
         selection_given = any(v is not None for v in selection)
 
-        if not selection_given and min_clusters is None:
+        if not selection_given and min_clusters is None and max_clusters is None:
             if not (filter_given or threshold_given):
                 return self.labels_
             labels = self._full_labels.copy()
@@ -476,12 +509,21 @@ class ToMAToCore:
             cluster_selection_method = self.cluster_selection_method
             n_clusters = self.n_clusters
 
+        resolved_min_clusters = (
+            self.min_clusters if min_clusters is None else min_clusters
+        )
+        resolved_max_clusters = (
+            self.max_clusters if max_clusters is None else max_clusters
+        )
+        self._validate_cluster_bounds(resolved_min_clusters, resolved_max_clusters)
+
         labels, modes, *_ = self._assign_labels(
             sig=sig,
             persistence_threshold=persistence_threshold,
             cluster_selection_method=cluster_selection_method,
             n_clusters=n_clusters,
-            min_clusters=self.min_clusters if min_clusters is None else min_clusters,
+            min_clusters=resolved_min_clusters,
+            max_clusters=resolved_max_clusters,
             noise_threshold=noise,
         )
         labels = labels.copy()
