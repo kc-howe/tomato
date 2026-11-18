@@ -72,6 +72,8 @@ class ToMAToCore:
         If True, cluster ascending modes; if False, descending modes.
     use_edge_gradients : bool
         If True, treat graph edge weights as function gradients.
+    n_jobs : int
+        Number of parallel workers to use. -1 uses all available workers.
     verbose : bool
         If True, prints logging output to console.
     """
@@ -90,6 +92,7 @@ class ToMAToCore:
         ascending: bool = True,
         use_edge_gradients: bool = False,
         verbose: bool = False,
+        n_jobs: int = -1,
     ) -> None:
         self.sig = sig
         self.persistence_threshold = persistence_threshold
@@ -107,6 +110,7 @@ class ToMAToCore:
         self.use_stability = use_stability
         self.use_edge_gradients = use_edge_gradients
         self.verbose = verbose
+        self.n_jobs = n_jobs
         self._validate_selection_parameters(
             self.cluster_selection_method, self.persistence_threshold, self.n_clusters
         )

@@ -54,6 +54,8 @@ class ToMATo(ToMAToCore):
         Remove duplicates from input data before graph construction.
     random_state : int or None
         Random seed for reproducibility.
+    n_jobs : int
+        Number of parallel workers to use. -1 uses all available workers.
     verbose : bool
         Print debugging statements.
     """
@@ -76,6 +78,7 @@ class ToMATo(ToMAToCore):
         drop_duplicates: bool = False,
         random_state: Optional[int] = None,
         verbose: bool = False,
+        n_jobs: int = -1,
     ) -> None:
         super().__init__(
             cluster_selection_method=cluster_selection_method,
@@ -90,6 +93,7 @@ class ToMATo(ToMAToCore):
             use_stability=use_stability,
             use_edge_gradients=False,
             verbose=verbose,
+            n_jobs=n_jobs,
         )
 
         self.n_neighbors = n_neighbors
@@ -190,6 +194,7 @@ class ToMATo(ToMAToCore):
                 use_approximate_knn=self.use_approximate_knn,
                 distance_weights=True,
                 random_state=self.random_state,
+                n_jobs=self.n_jobs,
             )
 
         self.knn_graph_ = graph
@@ -207,7 +212,8 @@ class ToMATo(ToMAToCore):
             if self.metric in ("euclidean", "sqeuclidean", "l2"):
                 graph = merge_components(
                     graph,
-                    X
+                    X,
+                    workers=self.n_jobs,
                 )
             else:
                 warnings.warn(
@@ -268,6 +274,7 @@ class ToMATo(ToMAToCore):
             distance_weights=True,
             query=X,
             random_state=self.random_state,
+            n_jobs=self.n_jobs,
         )
 
         idx, has = first_entry_per_row(incidence_graph)

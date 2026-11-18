@@ -171,6 +171,8 @@ class GeoToMATo(ToMAToCore):
         Remove duplicate attribute rows before fitting. Not supported
         together with sample_weight (duplicate rows may carry different
         weights that would need explicit aggregation).
+    n_jobs : int
+        Number of parallel workers to use. -1 uses all available workers.
     verbose : bool
         Print debugging statements.
     """
@@ -191,6 +193,7 @@ class GeoToMATo(ToMAToCore):
         noise_threshold: float = 0.9,
         drop_duplicates: bool = False,
         verbose: bool = False,
+        n_jobs: int = -1,
     ) -> None:
         super().__init__(
             sig=None,
@@ -204,6 +207,7 @@ class GeoToMATo(ToMAToCore):
             ascending=False,
             use_edge_gradients=False,
             verbose=verbose,
+            n_jobs=n_jobs,
         )
 
         if n_hops < 1:

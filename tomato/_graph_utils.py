@@ -613,6 +613,7 @@ def _query_pair(
     groups,
     trees,
     pos,
+    workers,
 ):
     """
     Find the exact minimum Euclidean bridge between two components.
@@ -626,7 +627,7 @@ def _query_pair(
         distances, indices = trees[j].query(
             pos[nodes_i],
             k=1,
-            workers=-1,
+            workers=workers,
         )
 
         idx = np.argmin(distances)
@@ -641,7 +642,7 @@ def _query_pair(
     distances, indices = trees[i].query(
         pos[nodes_j],
         k=1,
-        workers=-1,
+        workers=workers,
     )
 
     idx = np.argmin(distances)
@@ -736,6 +737,7 @@ def merge_components(
             [groups] * n_edges,
             [trees] * n_edges,
             [pos] * n_edges,
+            [workers] * n_edges,
         )
 
         for k, u, v, distance in results:

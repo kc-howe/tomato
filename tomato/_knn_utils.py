@@ -25,6 +25,7 @@ def build_knn_graph(
     distance_weights: bool = False,
     query: np.ndarray = None,
     random_state: Optional[int] = None,
+    n_jobs: int = -1,
 ) -> csr_matrix:
     """
     Build a k-nearest-neighbors graph from data.
@@ -45,6 +46,8 @@ def build_knn_graph(
         Data matrix to query for nearest neighbors.
     random_state : int or None
         Random seed for reproducibility.
+    n_jobs : int
+        Number of parallel workers to use. -1 uses all available workers.
 
     Returns
     -------
@@ -73,7 +76,7 @@ def build_knn_graph(
             n_iters=n_iters,
             max_candidates=60,
             low_memory=False,
-            n_jobs=-1,
+            n_jobs=n_jobs,
             compressed=False,
             random_state=random_state,
         )
@@ -84,7 +87,9 @@ def build_knn_graph(
             knn_indices, knn_dists = nn.query(query_data)
         graph = knn_to_csr(knn_dists, knn_indices, distance_weights, n_cols=X.shape[0])
     elif metric != "euclidean":
-        nn = NearestNeighbors(n_neighbors=n_neighbors + 1, metric=metric, n_jobs=-1)
+        nn = NearestNeighbors(
+            n_neighbors=n_neighbors + 1, metric=metric, n_jobs=n_jobs
+        )
         nn.fit(X)
         knn_dists, knn_indices = nn.kneighbors(query_data)
         if query is None:
@@ -103,7 +108,9 @@ def build_knn_graph(
             )
     else:
         tree = cKDTree(X)
-        knn_dists, knn_indices = tree.query(query_data, k=n_neighbors + 1, workers=-1)
+        knn_dists, knn_indices = tree.query(
+            query_data, k=n_neighbors + 1, workers=n_jobs
+        )
         if query is None:
             graph = knn_to_csr(
                 knn_dists[:, 1:],
